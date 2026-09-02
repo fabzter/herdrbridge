@@ -348,6 +348,21 @@ def state_exit(state: str) -> int:
     return STATE_EXIT.get(state, EXIT_ERROR)
 
 
+# Reverse of `classify()`, used by `Bridge.wait_status`'s polling fallback to decide whether a
+# bridge state satisfies an `until` set expressed in herdr's own vocabulary ("idle", "done",
+# "working", "blocked", "unknown"). "dead"/"missing" have no herdr status: they're handled as an
+# immediate failure by the caller instead of being looked up here.
+BRIDGE_TO_HERDR_STATUS = {
+    "idle": ("idle", "done"),
+    "busy": ("working",),
+    "approval": ("blocked",),
+    "secret": ("blocked",),
+    "clarify": ("blocked",),
+    "blocked": ("blocked",),
+    "unknown": ("unknown",),
+}
+
+
 # --- reply extraction for Hermes REPL and Claude alt-screen reads --------
 
 _BOX_EDGE = re.compile(r"^\s*[╭╰┌└├┬┴┼╮╯┐┘─━]{1}")
@@ -788,6 +803,47 @@ class Bridge:
         validate_name(name)
         self.h.cli("agent", "wait", name, "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
         return self.state(name)
+
+    def wait_status(self, name: str, until: tuple = ("idle", "done", "blocked"),
+                    timeout_ms: int = 600000, poll_s: float = 2.0) -> tuple:
+        """Wait for `name` to reach one of the herdr-vocabulary statuses in `until`
+        ("idle", "done", "working", "blocked", "unknown"), preferring herdr's own server-side
+        `agent wait` (cheap, event-driven). If that call itself fails for a reason unrelated to
+        the wait outcome — the socket closed mid-call, herdr returned non-JSON, the server isn't
+        running, or any other `HerdrError`/`OSError`/`ServerUnavailable` besides a genuine
+        `timeout` or the agent being gone (`agent_not_found`/`agent_not_running`, which are
+        re-raised as-is) — fall back to polling `self.state()` every `poll_s` until it maps onto
+        `until` or `timeout_ms` elapses. Returns `self.state(name)`."""
+        validate_name(name)
+        until_set = set(until)
+        try:
+            self.h.cli("agent", "wait", name, *[x for u in until for x in ("--until", u)],
+                       "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
+            return self.state(name)
+        except HerdrError as e:
+            if e.herdr_code == "timeout":
+                raise BridgeError(
+                    "timed out after %dms waiting for %r to reach %s" % (timeout_ms, name, sorted(until_set)),
+                    EXIT_TIMEOUT)
+            if e.herdr_code in ("agent_not_found", "agent_not_running"):
+                raise
+            # any other herdr-level failure (closed, bad_json, error, server_not_running, ...):
+            # the wait itself is unreliable, not the outcome — fall back to polling below.
+        except (OSError, ServerUnavailable):
+            pass
+        deadline = _now() + timeout_ms / 1000.0
+        while True:
+            state, agent = self.state(name)
+            if state in ("dead", "missing"):
+                raise BridgeError("session %r is %s while waiting for it to reach %s"
+                                  % (name, state, sorted(until_set)), state_exit(state) or EXIT_ERROR)
+            if until_set & set(BRIDGE_TO_HERDR_STATUS.get(state, ())):
+                return state, agent
+            if _now() >= deadline:
+                raise BridgeError(
+                    "timed out after %dms polling for %r to reach %s (herdr socket was unavailable)"
+                    % (timeout_ms, name, sorted(until_set)), EXIT_TIMEOUT)
+            _sleep(poll_s)
 
     def send(self, name: str, text: str, timeout_ms: int):
         validate_name(name)

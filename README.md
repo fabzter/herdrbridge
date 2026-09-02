@@ -39,7 +39,11 @@ operations a bridge actually needs: resolving a session name to a live
 agent, a restorable idle pane, or nothing (`resolve`); starting or resuming
 an agent in its workspace (`start`); reading and classifying its current
 state (`state`); sending a prompt and waiting for a reply (`send`);
-answering a clarification or walking an approval menu (`answer`,
+waiting for an agent to reach one of a set of target statuses, preferring
+herdr's own server-side `agent wait` but falling back to polling `state`
+if that call itself fails for a reason unrelated to the wait outcome, such
+as the socket dropping mid-call (`wait_status`); answering a clarification
+or walking an approval menu (`answer`,
 `navigate_menu`); and stopping a session or garbage-collecting stale tabs
 (`stop`, `gc`, `list_sessions`). Every public `Bridge` entry point validates
 `name` via `validate_name` before it does anything else, so an invalid name

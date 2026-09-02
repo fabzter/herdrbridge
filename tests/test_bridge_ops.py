@@ -454,6 +454,78 @@ class AnswerTests(unittest.TestCase):
         self.assertLess(elapsed, 0.05)  # patched clock/sleep: no real time should have passed
 
 
+class WaitStatusTests(unittest.TestCase):
+    def test_happy_path_uses_cli_wait_then_returns_state(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])],
+                       "agent wait": [ok("agent_wait", agent=agent("bean", status="idle"))]})
+        b = bridge(h)
+        state, a = b.wait_status("bean", timeout_ms=5000, poll_s=0)
+        self.assertEqual(state, "idle")
+        self.assertEqual(a["name"], "bean")
+        wait_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "wait")]
+        self.assertEqual(len(wait_calls), 1)
+        self.assertIn("--until", wait_calls[0]); self.assertIn("idle", wait_calls[0])
+        self.assertIn("--timeout", wait_calls[0]); self.assertIn("5000", wait_calls[0])
+        list_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(list_calls), 1)  # only the final state() check, no polling
+
+    def test_fallback_polls_state_when_wait_socket_closes(self):
+        # `agent wait` raises HerdrError("closed", ...) — the server-side wait dropped mid-call —
+        # so wait_status falls back to polling self.state() via `agent list`, scripted
+        # [working, working, idle]: the first two don't satisfy `until` and sleep, the third does.
+        agents = [agent("bean", status="working"), agent("bean", status="working"), agent("bean", status="idle")]
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[a]) for a in agents],
+                       "agent wait": [hb.HerdrError("closed", "herdr closed the socket without answering")]})
+        b = bridge(h)
+        sleeps = []
+        clock = {"t": 0.0}
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: (sleeps.append(s), clock.__setitem__("t", clock["t"] + s))), \
+             unittest.mock.patch.object(hb, "_now", lambda: clock["t"]):
+            state, a = b.wait_status("bean", timeout_ms=60000, poll_s=2.0)
+        self.assertEqual(state, "idle")
+        self.assertEqual(a["name"], "bean")
+        self.assertEqual(sleeps, [2.0, 2.0])
+        list_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(list_calls), 3)
+
+    def test_fallback_times_out_when_deadline_passes(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="working")])],
+                       "agent wait": [hb.HerdrError("bad_json", "non-JSON output from herdr agent wait")]})
+        b = bridge(h)
+        sleeps = []
+        clock_values = iter([0.0, 9999.0])  # deadline computed at t=0; first loop check is already past it
+        started = time.time()
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: sleeps.append(s)), \
+             unittest.mock.patch.object(hb, "_now", lambda: next(clock_values, 9999.0)):
+            with self.assertRaises(hb.BridgeError) as cm:
+                b.wait_status("bean", timeout_ms=1000, poll_s=0.5)
+        elapsed = time.time() - started
+        self.assertEqual(cm.exception.code, hb.EXIT_TIMEOUT)
+        self.assertEqual(sleeps, [])  # deadline was already past on the first poll check
+        self.assertLess(elapsed, 0.05)  # patched clock/sleep: no real time should have passed
+
+    def test_cli_timeout_raises_without_polling(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent wait": [hb.HerdrError("timeout", "herdr agent wait timed out after 5.0s")]})
+        b = bridge(h)
+        with self.assertRaises(hb.BridgeError) as cm:
+            b.wait_status("bean", timeout_ms=5000, poll_s=0)
+        self.assertEqual(cm.exception.code, hb.EXIT_TIMEOUT)
+        list_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(list_calls, [])  # a genuine CLI timeout must not fall back to polling
+
+    def test_agent_not_found_reraised(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent wait": [hb.HerdrError("agent_not_found", "no such agent")]})
+        b = bridge(h)
+        with self.assertRaises(hb.HerdrError) as cm:
+            b.wait_status("bean", timeout_ms=5000, poll_s=0)
+        self.assertEqual(cm.exception.herdr_code, "agent_not_found")
+
+
 class MenuNavTests(unittest.TestCase):
     def test_navigate_to_deny_sends_down_then_enter(self):
         footer = "↑/↓ to select · Enter confirm\n"
