@@ -84,6 +84,22 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(hb.parse_menu(menu), [])
         self.assertIsNone(hb.plan_menu_step(menu, "Deny"))
 
+    def test_boxed_rows_exactly_8_lines_above_footer_still_parses(self):
+        boxed = fx("hermes_approval_menu_boxed.txt")
+        lines = boxed.splitlines()
+        footer = lines[-1]
+        last_row_idx = next(i for i, ln in enumerate(lines) if "4. Deny" in ln)
+        rows_and_last_row = lines[:last_row_idx + 1]  # up to and including the last row, nothing else
+        filler8 = ["  (filler line %d)" % i for i in range(8)]
+        menu8 = "\n".join(rows_and_last_row + filler8 + [footer])
+        rows = hb.parse_menu(menu8)
+        self.assertEqual([(r.number, r.label, r.selected) for r in rows],
+                         [(1, "Allow once", True), (2, "Allow for this session", False),
+                          (3, "Add to permanent allowlist", False), (4, "Deny", False)])
+        filler9 = ["  (filler line %d)" % i for i in range(9)]
+        menu9 = "\n".join(rows_and_last_row + filler9 + [footer])
+        self.assertEqual(hb.parse_menu(menu9), [])
+
     def test_boxed_footer_without_rows_returns_empty(self):
         menu = "just some preamble\n↑/↓ to select, Enter to confirm, s show full command"
         self.assertEqual(hb.parse_menu(menu), [])

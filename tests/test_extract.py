@@ -54,21 +54,37 @@ class HermesExtractTests(unittest.TestCase):
         reply, trunc = hb.extract_reply(before, after, "nope", "hermes")
         self.assertEqual(reply, ""); self.assertTrue(trunc)
 
+    def test_wrapped_prompt_continuation_two_line_echo_is_skipped(self):
+        # A long single-line prompt wraps onto two physical terminal lines when echoed; the
+        # second line (no '●' marker) must be recognized as continuation of the prompt, not
+        # folded into the reply — and the guard (only skip while something's still left to
+        # match) must not eat any of the actual reply that follows.
+        prompt = ("Summarize the quarterly report and flag any numbers that look inconsistent "
+                  "with last quarter's filing please")
+        after = ("● Summarize the quarterly report and flag any numbers that look inconsistent with last\n"
+                 "quarter's filing please\n"
+                 "╭─ ⚕ Hermes  10:00─╮\n"
+                 "Nothing looks off; the numbers line up with last quarter.\n"
+                 "╰──╯\n❯\n")
+        reply, trunc = hb.extract_reply("", after, prompt, "hermes")
+        self.assertFalse(trunc)
+        self.assertEqual(reply, "Nothing looks off; the numbers line up with last quarter.")
+        self.assertNotIn("quarter's filing please", reply)
+
 
 class ClaudeExtractTests(unittest.TestCase):
     # claude_reply.txt is a live capture (claude-bridge tests/live/e2e_claude.sh against real
     # Claude Code 2.1.236) of `read e2e -n 120` after asking the prompt below in a fresh,
-    # read-only session opened on this repo. The extracted reply leads with the wrapped second
-    # line of the (single-line) submitted prompt: extract_reply() anchors on the first physical
-    # terminal line of the echo ('❯ <prompt start>'), so a prompt long enough to wrap leaves its
-    # continuation line as the start of the body — a known, minor cosmetic quirk, not something
-    # this test is trying to hide.
+    # read-only session opened on this repo. The submitted prompt is a single (long) line that
+    # wraps onto two physical terminal lines when echoed ('❯ <first line>' / '<continuation>');
+    # extract_reply() anchors on the first physical line and then walks forward skipping the
+    # wrapped continuation line before it starts extracting the reply.
     def test_reply_after_echo_without_ui_chrome(self):
         prompt = ("Read README.md in the current directory and answer in one sentence: "
                   "what is this repo? Reply with only that sentence.")
         reply, trunc = hb.extract_reply("", fx("claude_reply.txt"), prompt, "claude")
         self.assertFalse(trunc)
-        self.assertTrue(reply.startswith("Reply with only that sentence."))
+        self.assertNotIn("Reply with only that sentence.", reply)  # wrapped echo continuation, not reply
         self.assertIn("A Hermes Agent skill that lets Hermes hold a continuing, read-only "
                       "conversation with Claude", reply)
         self.assertNotIn("❯", reply); self.assertNotIn("? for shortcuts", reply)
@@ -77,9 +93,9 @@ class ClaudeExtractTests(unittest.TestCase):
 
     def test_real_claude_code_echoes_prompt_with_fancy_angle_not_ascii_gt(self):
         # Claude Code >= 2.1 echoes the submitted prompt with '❯' (U+276F), not the ASCII
-        # '>' the synthetic fixture used. Also strips the collapsed tool-summary line
-        # ("Read 1 file (ctrl+o to expand)") and the elapsed-time spinner footer
-        # ("✻ Sautéed for 4s") as UI chrome, the same way it already strips shortcuts hints.
+        # '>' the synthetic fixture used. Also strips the trailing "(ctrl+o to expand)" hint
+        # from the collapsed tool-summary line (keeping "Read 1 file" itself, unlike UI chrome
+        # such as shortcuts hints and the elapsed-time spinner footer, which are dropped).
         after = (
             "❯ Summarize what the file README.md is about in one sentence.\n\n"
             "  Read 1 file (ctrl+o to expand)\n\n"
@@ -94,10 +110,42 @@ class ClaudeExtractTests(unittest.TestCase):
         reply, trunc = hb.extract_reply("", after,
                                         "Summarize what the file README.md is about in one sentence.", "claude")
         self.assertFalse(trunc)
-        self.assertEqual(reply, "README.md describes a Hermes Agent skill that lets Hermes hold a continuing,\n"
-                                 "  read-only conversation with Claude Code.")
+        self.assertIn("Read 1 file", reply)
+        self.assertIn("README.md describes a Hermes Agent skill that lets Hermes hold a continuing,\n"
+                      "  read-only conversation with Claude Code.", reply)
         self.assertNotIn("ctrl+o to expand", reply)
         self.assertNotIn("Sautéed", reply)
+
+    def test_tool_activity_lines_are_kept_only_ctrl_o_hint_is_stripped(self):
+        # Policy pinned by the review: tool-activity lines stay in the reply in both renderings
+        # (the collapsed "Read 1 file (ctrl+o to expand)" and the expanded "⏺ Read(...)" /
+        # "  ⎿  Read N lines" pair); only the trailing parenthetical hint is stripped, and only
+        # when it's exactly that hint at the end of the line — a reply sentence that merely
+        # mentions "ctrl+o to expand" stays intact.
+        after = (
+            "❯ do a thing\n\n"
+            "⏺ Read(README.md)\n"
+            "  ⎿  Read 41 lines\n\n"
+            "  Read 1 file (ctrl+o to expand)\n\n"
+            "To expand a collapsed tool block press ctrl+o to expand it.\n\n"
+            "❯\n"
+        )
+        reply, trunc = hb.extract_reply("", after, "do a thing", "claude")
+        self.assertFalse(trunc)
+        self.assertIn("Read(README.md)", reply)
+        self.assertIn("⎿  Read 41 lines", reply)
+        self.assertIn("Read 1 file", reply)
+        self.assertNotIn("(ctrl+o to expand)", reply)
+        self.assertIn("To expand a collapsed tool block press ctrl+o to expand it.", reply)
+
+    def test_spinner_glyph_line_without_elapsed_suffix_is_preserved(self):
+        # The spinner-chrome regex only matches lines shaped like "<glyph> ... for Ns"; a normal
+        # reply line that happens to start with one of those glyphs but doesn't end that way
+        # must not be swept up as chrome.
+        after = "❯ note\n\n✳ Just a heads up about something important\n\n❯\n"
+        reply, trunc = hb.extract_reply("", after, "note", "claude")
+        self.assertFalse(trunc)
+        self.assertIn("Just a heads up about something important", reply)
 
 
 if __name__ == "__main__":

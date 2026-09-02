@@ -336,8 +336,9 @@ _HERMES_BOX_CLOSE = re.compile(r"^\s*╰")
 _PROMPT_LINE = re.compile(r"^\s*(│\s*)?❯\s*(│\s*)?$")
 _CLAUDE_ECHO = re.compile(r"^\s*[>❯]\s*(.*)$")
 _CLAUDE_CHROME = re.compile(
-    r"(\? for shortcuts|esc to interrupt|bypass permissions|⏵⏵|shift\+tab to cycle|ctrl\+o to expand"
+    r"(\? for shortcuts|esc to interrupt|bypass permissions|⏵⏵|shift\+tab to cycle"
     r"|^\s*[✢✳✻✽]\s+\S.*\bfor\s+\d+s\.?\s*$)", re.I)
+_CLAUDE_EXPAND_HINT = re.compile(r"\s*\(ctrl\+o to expand\)\s*$")
 
 
 def _first_line(prompt: str) -> str:
@@ -373,6 +374,8 @@ def _hermes_reply(lines: list, start: int) -> str | None:
 
 
 def _claude_reply(lines: list, start: int) -> str:
+    # Tool-activity lines (`⏺ Read(README.md)`, `  ⎿  Read 41 lines`, `Read 1 file (ctrl+o to
+    # expand)`) are kept, not dropped — only the trailing "(ctrl+o to expand)" hint is stripped.
     body = []
     for ln in lines[start:]:
         if _PROMPT_LINE.match(ln) or "❯" in ln:
@@ -384,6 +387,7 @@ def _claude_reply(lines: list, start: int) -> str:
             continue
         s = ln.rstrip()
         s = re.sub(r"^\s*⏺\s?", "", s)
+        s = _CLAUDE_EXPAND_HINT.sub("", s)
         body.append(s)
     text = "\n".join(body)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -407,11 +411,32 @@ def _new_text(before: str, after: str) -> str | None:
     return None
 
 
+def _skip_wrapped_prompt_continuation(lines: list, idx: int, prompt: str, echo: str) -> int:
+    """A long single-line prompt can wrap onto more than one physical terminal line when it's
+    echoed back; the lines right after the matched echo line can be further continuation of that
+    same prompt text rather than the reply. Starting at `idx`, consume lines whose normalized
+    text is a prefix of what's left of the prompt (normalized) after the echoed portion; stop at
+    the first line that doesn't match. Guard: only ever skip while something is still left to
+    match, so a reply that happens to start with the same word(s) as the prompt is never eaten."""
+    remaining = " ".join(prompt.split())
+    echoed = " ".join(echo.split())
+    remaining = remaining[len(echoed):].lstrip() if remaining.startswith(echoed) else ""
+    while remaining and idx < len(lines):
+        text = " ".join(lines[idx].split())
+        if text and remaining.startswith(text):
+            remaining = remaining[len(text):].lstrip()
+            idx += 1
+        else:
+            break
+    return idx
+
+
 def extract_reply(before: str, after: str, prompt: str, kind: str):
     lines = after.splitlines()
     anchor = _first_line(prompt)
     echo_re = _HERMES_ECHO if kind == "hermes" else _CLAUDE_ECHO
     echo_idx = None
+    echo_text = None
     for i, ln in enumerate(lines):
         m = echo_re.match(ln)
         if m and anchor:
@@ -423,13 +448,17 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
                 matches = echo.startswith(anchor[:60])
             if matches:
                 echo_idx = i
+                echo_text = echo
     if echo_idx is not None:
+        body_start = _skip_wrapped_prompt_continuation(lines, echo_idx + 1, prompt, echo_text)
         if kind == "hermes":
-            boxed = _hermes_reply(lines, echo_idx + 1)
+            boxed = _hermes_reply(lines, body_start)
             if boxed is not None:
                 return boxed, False
-            return _claude_reply(lines, echo_idx + 1), True  # generic fallback: no Hermes box found
-        return _claude_reply(lines, echo_idx + 1), False
+            # generic fallback: no Hermes box found; reuse the Claude chrome-stripping rules
+            # above (tool-activity lines kept, ctrl+o hint stripped, spinner/shortcuts dropped)
+            return _claude_reply(lines, body_start), True
+        return _claude_reply(lines, body_start), False
     fresh = _new_text(before, after)
     if fresh is not None:
         return fresh, True
@@ -459,7 +488,9 @@ def parse_menu(visible: str) -> list:
     numbered rows findable above it. Rows may be wrapped in a box (`_strip_box`) and separated
     from the footer by a bounded number of non-row lines (status line, box borders, blanks) —
     those are skipped while hunting for the first row, up to `_MENU_SKIP_BUDGET` of them; once
-    a row is found, any further non-row line ends the walk."""
+    a row is found, any further non-row line ends the walk. The "no accidental enter" guarantee
+    for menu navigation doesn't live here: it depends on `plan_menu_step`'s exactly-one-selected
+    / exactly-one-target rule refusing to act on whatever rows this function returns."""
     lines = visible.splitlines()
     footer_idx = None
     for i in range(len(lines) - 1, -1, -1):
@@ -512,6 +543,8 @@ class BridgeConfig:
     start_timeout_ms: int = 120000
     wait_timeout_ms: int = 600000
     read_lines: int = 400
+    shell_settle_s: float = 70.0
+    poll_s: float = 0.5
 
 
 class Bridge:
@@ -571,18 +604,23 @@ class Bridge:
                          "--cwd", cwd, "--label", name, "--no-focus")["result"]
         return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
 
-    def _await_shell_ready(self, pane_id: str, wait_s: float = 70, poll_s: float = 0.3) -> None:
+    def _await_shell_ready(self, pane_id: str) -> None:
         """A just-created pane's shell may still be mid-startup with something other than a
         plain shell in the foreground; `agent start` fails immediately with `agent_pane_busy`
         in that case instead of waiting. One observed cause: a workspace's root pane and its
         first tab both get fresh shells at nearly the same moment, and if both independently
         run `pyenv rehash` on startup they collide on pyenv's shim lock file — the loser just
-        retries every 0.1s until pyenv's own ~60s timeout gives up. `wait_s` is set to clear
-        that worst case. Poll until the pane settles into a plain shell, or give up after
-        `wait_s` and let `agent start` raise its own error."""
-        deadline = time.time() + wait_s
+        retries every 0.1s until pyenv's own ~60s timeout gives up. `self.cfg.shell_settle_s` is
+        set to clear that worst case; lower it via `BridgeConfig` for a snappier local setup.
+        Poll (every `self.cfg.poll_s`) until the pane settles into a plain shell, or give up
+        after `shell_settle_s` and let `agent start` raise its own error. Returns immediately,
+        without waiting out the rest of the window, if the pane has vanished in the meantime
+        (`pane_info` returns None) — there's nothing left to settle."""
+        if self.pane_info(pane_id) is None:
+            return
+        deadline = time.time() + self.cfg.shell_settle_s
         while not self.pane_is_shell(pane_id) and time.time() < deadline:
-            time.sleep(poll_s)
+            time.sleep(self.cfg.poll_s)
 
     # --- session identity ---------------------------------------------------
     def record_session(self, name: str, agent: dict) -> None:
@@ -614,7 +652,12 @@ class Bridge:
 
     # --- lifecycle ------------------------------------------------------------
     def start(self, name: str, launch_args: list, fresh: bool = False, resume_flag: str = "--resume",
-              cwd: str | None = None, busy_wait_s: float = 10) -> dict:
+              cwd: str | None = None, busy_wait_s: float = 10.0) -> dict:
+        """Resolve `name` to a live agent (returned as-is), or create/reuse a pane and launch it
+        there, resuming its stored session unless `fresh`. Worst-case latency when a new pane is
+        created: the shell-settle wait (`self.cfg.shell_settle_s`) + `busy_wait_s` of
+        `agent_pane_busy` retries + one `agent start` call bounded by `self.cfg.start_timeout_ms`
+        plus a 30s margin."""
         kind, obj = self.resolve(name)
         if kind == "live":
             self.record_session(name, obj)
@@ -628,7 +671,7 @@ class Bridge:
         else:
             tab_id, pane_id = self._create_tab(name, cwd or st.get("cwd") or self.cfg.default_cwd)
             self.store.save(name, tab_id=tab_id, pane_id=pane_id, cwd=cwd or st.get("cwd") or self.cfg.default_cwd)
-            self._await_shell_ready(pane_id)
+            self._await_shell_ready(pane_id)  # settle wait: self.cfg.shell_settle_s / self.cfg.poll_s
         args = list(launch_args)
         if st.get("agent_session_id"):
             args += [resume_flag, st["agent_session_id"]]
@@ -636,7 +679,7 @@ class Bridge:
         # moment `agent start` actually fires is the authoritative one and can still lose a brief
         # race (observed live: the pane looked like a plain shell an instant before agent_pane_busy
         # came back anyway). Retry the call itself on that specific error for a bit before giving up.
-        busy_deadline = time.time() + busy_wait_s
+        busy_deadline = None
         while True:
             try:
                 res = self.h.cli("agent", "start", name, "--kind", self.cfg.kind, "--pane", pane_id,
@@ -645,9 +688,16 @@ class Bridge:
                 agent = res["agent"]
                 break
             except HerdrError as e:
-                if e.herdr_code == "agent_pane_busy" and time.time() < busy_deadline:
-                    time.sleep(0.3)
-                    continue
+                if e.herdr_code == "agent_pane_busy":
+                    # Budget starts counting from the FIRST agent_pane_busy failure, not from
+                    # before we ever called `agent start` — a slow first attempt shouldn't eat
+                    # into the retry budget.
+                    if busy_deadline is None:
+                        busy_deadline = time.time() + busy_wait_s
+                    if time.time() < busy_deadline:
+                        time.sleep(self.cfg.poll_s)
+                        continue
+                    raise
                 if e.herdr_code != "agent_not_ready":
                     raise
                 agent = self.find_agent(name) or {"pane_id": pane_id, "name": name, "agent_status": "blocked"}

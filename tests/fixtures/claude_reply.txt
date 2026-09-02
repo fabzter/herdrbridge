@@ -1,15 +1,15 @@
 export plugin already enabled
-fabzter@fabrizio-mac-mini hermes-claude-bridge % claude --allowedTools Read,Grep,Glob,WebSearch,WebFetch --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit
+user@host hermes-claude-bridge % claude --allowedTools Read,Grep,Glob,WebSearch,WebFetch --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit
 Permission deny rule "MultiEdit" matches no known tool — check for typos.
 ╭─── Claude Code v2.1.236 ───────────────────────────────────────────────────────────────────╮
 │                                                    │ Tips for getting started              │
-│               Welcome back Fabrizio!               │ Run /init to create a CLAUDE.md file… │
+│                  Welcome back!                     │ Run /init to create a CLAUDE.md file… │
 │                                                    │ ───────────────────────────────────── │
 │                       ▐▛███▛█                      │ What's new                            │
 │                      ▝▜██████▀                     │ Fixed Claude Code failing to launch … │
 │                        ▝▝ ▝▝                       │ Fixed remote and scheduled sessions … │
 │   Opus 5 (1M context) with high… · Claude Team ·   │ Added Claude Fable 5.1 (`claude-fabl… │
-│   Luca                                             │ /release-notes for more               │
+│   Example                                          │ /release-notes for more               │
 │             ~/src/hermes-claude-bridge             │                                       │
 ╰────────────────────────────────────────────────────────────────────────────────────────────╯
 

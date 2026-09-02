@@ -38,7 +38,12 @@ an agent in its workspace (`start`); reading and classifying its current
 state (`state`); sending a prompt and waiting for a reply (`send`);
 answering a clarification or walking an approval menu (`answer`,
 `navigate_menu`); and stopping a session or garbage-collecting stale tabs
-(`stop`, `gc`, `list_sessions`).
+(`stop`, `gc`, `list_sessions`). Before launching an agent in a freshly
+created pane, `start` waits up to `BridgeConfig.shell_settle_s` (70s by
+default, polling every `poll_s`) for the pane's shell to settle, since a
+just-created pane can briefly have something other than a plain shell in the
+foreground; lower `shell_settle_s` in your own `BridgeConfig` if your setup
+never hits that worst case and you'd rather fail fast.
 
 Downstream repos never install this as a dependency; each bridge repo vendors
 this file with a `tools/sync-lib.sh` that fetches `herdrbridge.py`,

@@ -4,7 +4,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import herdrbridge as hb
 from fakes import FakeHerdr, agent, ok, WS
 
-CFG = hb.BridgeConfig(workspace_label="hermes-bridge", kind="hermes", default_cwd="/Users/fabzter")
+CFG = hb.BridgeConfig(workspace_label="hermes-bridge", kind="hermes", default_cwd="/Users/fabzter",
+                      shell_settle_s=0.05, poll_s=0)
 
 
 def _tmpdir():
@@ -110,6 +111,7 @@ class RecordSessionTests(unittest.TestCase):
 
 
 READY_SHELL = ok("pane_process_info", process_info={"foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})
+PANE_EXISTS = ok("pane_info", pane={"pane_id": "w1:p5", "workspace_id": "w1"})
 
 
 class StartTests(unittest.TestCase):
@@ -118,6 +120,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3", "label": "bean"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [READY_SHELL],
                        "agent start": [ok("agent_started", agent=started, argv=["hermes", "chat"])]})
         b = bridge(h); b.store.save("bean", agent_session_id="S1")
@@ -133,6 +136,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [READY_SHELL],
                        "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
         b = bridge(h); b.store.save("bean", agent_session_id="S1")
@@ -153,6 +157,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [READY_SHELL],
                        "agent start": [hb.HerdrError("agent_not_ready", "still booting")]})
         b = bridge(h)
@@ -170,6 +175,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [
                            ok("pane_process_info", process_info={"foreground_processes": [
                                {"name": "sleep", "argv": ["sleep", "0.1"]},
@@ -192,6 +198,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [READY_SHELL],
                        "agent start": [hb.HerdrError("agent_pane_busy", "not an available shell"),
                                        ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
@@ -205,12 +212,29 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [PANE_EXISTS],
                        "pane process-info": [READY_SHELL],
                        "agent start": [hb.HerdrError("agent_pane_busy", "not an available shell")]})
         b = bridge(h)
         with self.assertRaises(hb.HerdrError) as cm:
             b.start("bean", ["chat"], busy_wait_s=0)
         self.assertEqual(cm.exception.herdr_code, "agent_pane_busy")
+        self.assertEqual(cm.exception.code, hb.EXIT_BUSY)
+
+    def test_start_pane_vanished_before_settle_returns_immediately_without_polling(self):
+        # If the freshly created pane is already gone by the time we check it (e.g. herdr
+        # closed it racing this call), _await_shell_ready must return immediately instead of
+        # burning the whole shell_settle_s window polling pane_is_shell() on a pane that no
+        # longer exists. No "pane process-info" result is scripted below: if pane_is_shell()
+        # were called at all, FakeHerdr would raise for the missing scripted result.
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])],
+                       "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane get": [hb.HerdrError("pane_not_found", "gone")],
+                       "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
+        b = bridge(h)
+        b.start("bean", ["chat"])
+        self.assertFalse([c for c in h.calls if c[:3] == ("cli", "pane", "process-info")])
 
 
 class ExplainRuleTests(unittest.TestCase):

@@ -1087,13 +1087,13 @@ git commit -m "herdrbridge: approval-menu parser and one-step navigation planner
 
 **Interfaces:**
 - Produces:
-  - `@dataclass class BridgeConfig: workspace_label: str; kind: str; default_cwd: str; exit_command: str = "/exit"; start_timeout_ms: int = 60000; wait_timeout_ms: int = 600000; read_lines: int = 400`
+  - `@dataclass class BridgeConfig: workspace_label: str; kind: str; default_cwd: str; exit_command: str = "/exit"; start_timeout_ms: int = 60000; wait_timeout_ms: int = 600000; read_lines: int = 400; shell_settle_s: float = 70.0; poll_s: float = 0.5`
   - `class Bridge(h: Herdr, cfg: BridgeConfig, store: StateStore)` with:
     - `workspace() -> dict` (find-or-create by label; cached)
     - `tabs() -> list[dict]`, `panes() -> list[dict]`, `find_agent(name) -> dict | None`
     - `pane_info(pane_id) -> dict | None`, `pane_is_shell(pane_id) -> bool`
     - `resolve(name) -> tuple[str, object]` → `("live", agent)`, `("restorable", pane_id)`, `("missing", None)`
-    - `start(name, launch_args: list[str], fresh: bool = False, resume_flag: str = "--resume") -> dict` (agent info)
+    - `start(name, launch_args: list[str], fresh: bool = False, resume_flag: str = "--resume", cwd: str | None = None, busy_wait_s: float = 10.0) -> dict` (agent info)
     - `state(name) -> tuple[str, dict | None]` (bridge state, agent)
     - `explain_rule(name) -> str | None`
     - `read(name, lines: int, source: str = "recent-unwrapped") -> str`
