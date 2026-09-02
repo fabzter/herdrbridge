@@ -499,10 +499,10 @@ class Bridge:
         return [a for a in self.h.cli("agent", "list")["result"].get("agents", []) if a.get("workspace_id") == ws]
 
     def find_agent(self, name: str) -> dict | None:
-        for a in self.agents():
-            if a.get("name") == name:
-                return a
-        return None
+        matches = [a for a in self.agents() if a.get("name") == name]
+        if len(matches) > 1:
+            raise BridgeError("multiple live agents named %r; refusing to guess" % name, EXIT_ERROR)
+        return matches[0] if matches else None
 
     def pane_info(self, pane_id: str) -> dict | None:
         try:
@@ -515,7 +515,7 @@ class Bridge:
     def pane_is_shell(self, pane_id: str) -> bool:
         info = self.h.cli("pane", "process-info", "--pane", pane_id)["result"].get("process_info", {})
         fg = info.get("foreground_processes") or []
-        return all(os.path.basename(str(p.get("name", ""))) in SHELL_NAMES for p in fg)
+        return bool(fg) and all(os.path.basename(str(p.get("name", ""))) in SHELL_NAMES for p in fg)
 
     def _create_tab(self, name: str, cwd: str) -> tuple:
         res = self.h.cli("tab", "create", "--workspace", self.workspace()["workspace_id"],
@@ -525,7 +525,11 @@ class Bridge:
     # --- session identity ---------------------------------------------------
     def record_session(self, name: str, agent: dict) -> None:
         sess = (agent.get("agent_session") or {}).get("value")
-        fields = {"pane_id": agent.get("pane_id"), "tab_id": agent.get("tab_id")}
+        fields = {}
+        if agent.get("pane_id"):
+            fields["pane_id"] = agent["pane_id"]
+        if agent.get("tab_id"):
+            fields["tab_id"] = agent["tab_id"]
         if sess:
             fields["agent_session_id"] = sess
         self.store.save(name, **fields)
@@ -538,7 +542,9 @@ class Bridge:
         pane_id = st.get("pane_id")
         if pane_id:
             info = self.pane_info(pane_id)
-            if info and info.get("workspace_id") == self.workspace()["workspace_id"] and self.pane_is_shell(pane_id):
+            if (info and not info.get("agent")
+                    and info.get("workspace_id") == self.workspace()["workspace_id"]
+                    and self.pane_is_shell(pane_id)):
                 return "restorable", pane_id
         return "missing", None
 
@@ -614,6 +620,8 @@ class Bridge:
         except HerdrError as e:
             if e.herdr_code == "agent_prompt_stalled":
                 self.h.cli("agent", "wait", name, "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
+            elif e.herdr_code == "agent_blocked":
+                pass  # agent is now blocked; fall through to read/state/dialog below
             elif e.herdr_code == "timeout":
                 raise BridgeError("timed out after %dms waiting for %r; it may still be working" % (timeout_ms, name), EXIT_TIMEOUT)
             else:
@@ -626,14 +634,17 @@ class Bridge:
         dialog = self.visible(name) if state in ("approval", "secret", "clarify", "blocked") else ""
         return state, reply, truncated, dialog
 
-    def answer(self, name: str, text: str) -> str:
+    def answer(self, name: str, text: str, settle_s: float = 1.0) -> str:
         state, agent = self.state(name)
         if state != "clarify":
             raise BridgeError("session %r is %s, not clarify; refusing to answer" % (name, state), state_exit(state))
         self.h.cli("pane", "send-text", agent["pane_id"], text)
         self.h.cli("pane", "send-keys", agent["pane_id"], "enter")
-        time.sleep(1.0)
-        return self.state(name)[0]
+        time.sleep(settle_s)
+        new_state, _ = self.state(name)
+        if new_state == "clarify":
+            raise BridgeError("answer to %r did not register; agent still in clarify" % name, EXIT_CLARIFY)
+        return new_state
 
     def navigate_menu(self, name: str, target_label: str, max_steps: int = 8, settle_s: float = 0.4) -> str:
         state, _ = self.state(name)
@@ -656,8 +667,9 @@ class Bridge:
             tab_id = a.get("tab_id")
             try:
                 self.h.cli("agent", "prompt", name, self.cfg.exit_command)
-            except HerdrError:
-                pass
+            except HerdrError as e:
+                if e.herdr_code not in ("agent_not_running", "agent_not_found", "agent_blocked"):
+                    raise
             deadline = time.time() + wait_s
             while time.time() < deadline and self.find_agent(name):
                 time.sleep(0.5)
@@ -696,6 +708,8 @@ class Bridge:
         agents = {a.get("name"): a for a in self.agents()}
         for tab in self.tabs():
             name = tab.get("label")
+            if not name or not NAME_RE.match(name):
+                continue
             a = agents.get(name)
             if a:
                 st = classify(a.get("agent_status"), self.explain_rule(name) if a.get("agent_status") == "blocked" else None)
