@@ -388,8 +388,15 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
     echo_idx = None
     for i, ln in enumerate(lines):
         m = echo_re.match(ln)
-        if m and anchor and m.group(1).strip().startswith(anchor[:60]):
-            echo_idx = i
+        if m and anchor:
+            echo = m.group(1).strip()
+            # Exact match for short prompts; prefix match for long ones
+            if len(anchor) <= 60:
+                matches = echo == anchor
+            else:
+                matches = echo.startswith(anchor[:60])
+            if matches:
+                echo_idx = i
     if echo_idx is not None:
         if kind == "hermes":
             boxed = _hermes_reply(lines, echo_idx + 1)
@@ -398,6 +405,6 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
             return _claude_reply(lines, echo_idx + 1), False  # generic: strip chrome after echo
         return _claude_reply(lines, echo_idx + 1), False
     fresh = _new_text(before, after)
-    if fresh:
+    if fresh is not None:
         return fresh, True
     return "\n".join(lines[-120:]).strip(), True

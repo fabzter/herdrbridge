@@ -32,6 +32,22 @@ class HermesExtractTests(unittest.TestCase):
         after = "● hi\n╭─ ⚕ Hermes  10:00─╮\n│ line one   │\n│ line two   │\n╰──────╯\n❯\n"
         self.assertEqual(hb.extract_reply("", after, "hi", "hermes"), ("line one\nline two", False))
 
+    def test_short_prompt_does_not_false_anchor(self):
+        after = "● okay here is something unrelated\n╭─ ⚕ Hermes  10:00─╮\nwrong\n╰──╯\n● ok\n╭─ ⚕ Hermes  10:01─╮\nright\n╰──╯\n❯\n"
+        reply, trunc = hb.extract_reply("", after, "ok", "hermes")
+        self.assertEqual(reply, "right"); self.assertFalse(trunc)
+
+    def test_short_prompt_with_only_prefix_echo_falls_back(self):
+        after = "● okay here is something unrelated\n╭─ ⚕ Hermes  10:00─╮\nwrong\n╰──╯\n❯\n"
+        reply, trunc = hb.extract_reply("", after, "ok", "hermes")
+        self.assertTrue(trunc)  # Fallback used since no exact match for "ok"
+
+    def test_new_text_match_with_nothing_new_returns_empty(self):
+        before = fx("hermes_before.txt")
+        after = fx("hermes_before.txt")
+        reply, trunc = hb.extract_reply(before, after, "nope", "hermes")
+        self.assertEqual(reply, ""); self.assertTrue(trunc)
+
 
 class ClaudeExtractTests(unittest.TestCase):
     def test_reply_after_echo_without_ui_chrome(self):
