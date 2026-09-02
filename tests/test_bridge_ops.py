@@ -1,4 +1,4 @@
-import os, sys, tempfile, unittest
+import atexit, os, shutil, sys, tempfile, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 import herdrbridge as hb
@@ -7,8 +7,16 @@ from fakes import FakeHerdr, agent, ok, WS
 CFG = hb.BridgeConfig(workspace_label="hermes-bridge", kind="hermes", default_cwd="/Users/fabzter")
 
 
+def _tmpdir():
+    """A mkdtemp() that cleans up at interpreter exit instead of leaking (helper used by `bridge()`,
+    a free function shared by many test methods with no TestCase to hang addCleanup off of)."""
+    d = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
+    return d
+
+
 def bridge(h):
-    return hb.Bridge(h, CFG, hb.StateStore(tempfile.mkdtemp()))
+    return hb.Bridge(h, CFG, hb.StateStore(_tmpdir()))
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -74,6 +82,14 @@ class PaneIsShellTests(unittest.TestCase):
         h = FakeHerdr({"pane process-info": [ok("pane_process_info", process_info={"foreground_processes": [{"name": "node"}]})]})
         self.assertFalse(bridge(h).pane_is_shell("w1:p3"))
 
+    def test_pane_not_found_is_not_shell(self):
+        h = FakeHerdr({"pane process-info": [hb.HerdrError("pane_not_found", "gone")]})
+        self.assertFalse(bridge(h).pane_is_shell("w1:p3"))
+
+    def test_not_found_is_not_shell(self):
+        h = FakeHerdr({"pane process-info": [hb.HerdrError("not_found", "gone")]})
+        self.assertFalse(bridge(h).pane_is_shell("w1:p3"))
+
 
 class FindAgentTests(unittest.TestCase):
     def test_refuses_ambiguous_same_name_agents(self):
@@ -82,6 +98,15 @@ class FindAgentTests(unittest.TestCase):
         with self.assertRaises(hb.BridgeError) as cm:
             bridge(h).find_agent("bean")
         self.assertEqual(cm.exception.code, hb.EXIT_ERROR)
+
+
+class RecordSessionTests(unittest.TestCase):
+    def test_nothing_to_record_creates_no_state_file(self):
+        h = FakeHerdr({})
+        b = bridge(h)
+        b.record_session("x", {})
+        self.assertFalse(os.path.exists(os.path.join(b.store.dir, "x.json")))
+        self.assertEqual(b.store.load("x"), {})
 
 
 class StartTests(unittest.TestCase):
@@ -136,6 +161,15 @@ class ExplainRuleTests(unittest.TestCase):
     def test_returns_none_when_explain_raises(self):
         h = FakeHerdr({"agent explain": [hb.HerdrError("not_found", "no such agent")]})
         self.assertIsNone(bridge(h).explain_rule("bean"))
+
+    def test_finds_rule_top_level(self):
+        h = FakeHerdr({"agent explain": [{"matched_rule": {"id": "credential_prompt"}}]})
+        self.assertEqual(bridge(h).explain_rule("bean"), "credential_prompt")
+
+    def test_finds_rule_nested_under_result_explain(self):
+        h = FakeHerdr({"agent explain": [
+            {"result": {"type": "agent_explain", "explain": {"matched_rule": {"id": "credential_prompt"}}}}]})
+        self.assertEqual(bridge(h).explain_rule("bean"), "credential_prompt")
 
 
 class StateTests(unittest.TestCase):
@@ -209,7 +243,8 @@ class SendTests(unittest.TestCase):
                       {"agent read": ["", "some blocked screen\n"]})
         state, reply, trunc, dialog = bridge(h).send("bean", "hello", 1000)
         self.assertEqual(state, "secret")
-        self.assertTrue(dialog)
+        self.assertEqual(reply, "")
+        self.assertTrue(dialog.startswith("MESSAGE NOT DELIVERED"))
         self.assertFalse([c for c in h.calls if c[:3] == ("cli", "agent", "wait")])
 
 
@@ -219,7 +254,7 @@ class AnswerTests(unittest.TestCase):
                        "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])]})
         with self.assertRaises(hb.BridgeError) as cm:
             bridge(h).answer("bean", "42", settle_s=0)
-        self.assertEqual(cm.exception.code, hb.state_exit("idle"))
+        self.assertEqual(cm.exception.code, 1)  # refusal exit codes must never be 0, even for idle
 
     def test_sends_text_then_enter_and_returns_new_state(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
@@ -261,6 +296,13 @@ class MenuNavTests(unittest.TestCase):
         keys = [c[4] for c in h.calls if c[:3] == ("cli", "agent", "send-keys")]
         self.assertEqual(keys, ["down", "enter"])
 
+    def test_navigate_refuses_when_idle_with_nonzero_exit_code(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])]})
+        with self.assertRaises(hb.BridgeError) as cm:
+            bridge(h).navigate_menu("bean", "Deny", settle_s=0)
+        self.assertEqual(cm.exception.code, 1)  # refusal exit codes must never be 0, even for idle
+
     def test_navigate_refuses_unrecognized_menu(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[agent("bean", status="blocked")])],
@@ -301,6 +343,15 @@ class StopGcListTests(unittest.TestCase):
         calls_after_prompt = [c for c in h.calls[prompt_idx + 1:] if c[:3] == ("cli", "agent", "list")]
         self.assertGreaterEqual(len(calls_after_prompt), 2)
 
+    def test_stop_tolerates_agent_prompt_stalled(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", tab="w1:t2")]), ok("agent_list", agents=[])],
+                       "agent prompt": [hb.HerdrError("agent_prompt_stalled", "no change")],
+                       "tab close": [ok("tab_closed")]})
+        b = bridge(h)
+        self.assertTrue(b.stop("bean", wait_s=0))
+        self.assertEqual([c for c in h.calls if c[:3] == ("cli", "tab", "close")][0][3], "w1:t2")
+
     def test_stop_tolerates_tab_close_not_found(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[agent("bean", tab="w1:t2")]), ok("agent_list", agents=[])],
@@ -312,12 +363,25 @@ class StopGcListTests(unittest.TestCase):
     def test_gc_closes_shell_only_tabs(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
-                       "tab list": [ok("tab_list", tabs=[{"tab_id": "w1:t1", "label": "bean"}, {"tab_id": "w1:t2", "label": "old"}])],
+                       "tab list": [ok("tab_list", tabs=[{"tab_id": "w1:t1", "label": "bean"}, {"tab_id": "w1:t2", "label": "old"},
+                                                          {"tab_id": "w1:t3", "label": "1"}, {"tab_id": "w1:t4", "label": "scratch pane"},
+                                                          {"tab_id": "w1:t5", "label": None}])],
                        "pane list": [ok("pane_list", panes=[{"pane_id": "w1:p1", "tab_id": "w1:t1", "agent": "hermes", "agent_status": "idle"},
-                                                             {"pane_id": "w1:p2", "tab_id": "w1:t2", "agent_status": "unknown"}])],
+                                                             {"pane_id": "w1:p2", "tab_id": "w1:t2", "agent_status": "unknown"},
+                                                             {"pane_id": "w1:p3", "tab_id": "w1:t3", "agent_status": "unknown"},
+                                                             {"pane_id": "w1:p4", "tab_id": "w1:t4", "agent_status": "unknown"},
+                                                             {"pane_id": "w1:p5", "tab_id": "w1:t5", "agent_status": "unknown"}])],
                        "pane process-info": [ok("pane_process_info", process_info={"foreground_processes": [{"name": "zsh"}]})],
                        "tab close": [ok("tab_closed")]})
         self.assertEqual(bridge(h).gc(), ["w1:t2"])
+
+    def test_gc_skips_tab_whose_pane_process_info_raises_pane_not_found(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])],
+                       "tab list": [ok("tab_list", tabs=[{"tab_id": "w1:t2", "label": "old"}])],
+                       "pane list": [ok("pane_list", panes=[{"pane_id": "w1:p2", "tab_id": "w1:t2", "agent_status": "unknown"}])],
+                       "pane process-info": [hb.HerdrError("pane_not_found", "gone")]})
+        self.assertEqual(bridge(h).gc(), [])
 
     def test_list_sessions(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],

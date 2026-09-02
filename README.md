@@ -40,12 +40,16 @@ answering a clarification or walking an approval menu (`answer`,
 `navigate_menu`); and stopping a session or garbage-collecting stale tabs
 (`stop`, `gc`, `list_sessions`).
 
-Downstream repos never install this as a dependency; each vendors a pinned
-copy. A `tools/sync-lib.sh` script in `fabzter/hermes-bridge` and
-`fabzter/hermes-claude-bridge` fetches `herdrbridge.py`, `tests/fakes.py`,
-and the transcript fixtures under `tests/fixtures/` from this repo at a
-specific commit, recording that commit's hash in a local `herdrbridge.version`
-file. To pick up a change made here, a downstream repo re-runs its
-`tools/sync-lib.sh` against the new commit and updates `herdrbridge.version`
-accordingly — the library is developed and tested in this repo first, and
-downstream repos update to it deliberately rather than tracking it live.
+Downstream repos never install this as a dependency; each bridge repo vendors
+this file with a `tools/sync-lib.sh` that fetches `herdrbridge.py`,
+`tests/fakes.py`, and the transcript fixtures under `tests/fixtures/` from
+this repo at a specific commit, recording that commit's hash in a local
+`herdrbridge.version` file. To pick up a change made here, a downstream repo
+re-runs its `tools/sync-lib.sh` against the new commit and updates
+`herdrbridge.version` accordingly — the library is developed and tested in
+this repo first, and downstream repos update to it deliberately rather than
+tracking it live.
+
+Requires herdr >= 0.8.2.
+
+Tests: `python3 -m unittest discover -s tests -v`

@@ -1,13 +1,20 @@
-import json, os, sys, tempfile, unittest
+import json, os, shutil, sys, tempfile, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import herdrbridge as hb
 
 
 class StateStoreTests(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp(); self.store = hb.StateStore(self.dir)
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.store = hb.StateStore(self.dir)
 
     def test_load_missing_is_empty(self):
+        self.assertEqual(self.store.load("bean"), {})
+
+    def test_load_corrupt_json_is_empty(self):
+        with open(os.path.join(self.dir, "bean.json"), "w") as f:
+            f.write("{not json")
         self.assertEqual(self.store.load("bean"), {})
 
     def test_save_merges_and_round_trips(self):

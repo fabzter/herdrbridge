@@ -18,6 +18,7 @@ import time
 import uuid
 
 SESSION_DEFAULT = "agents"
+SESSION_NAME = SESSION_DEFAULT
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 EXIT_OK, EXIT_ERROR, EXIT_MISSING, EXIT_APPROVAL, EXIT_SECRET = 0, 1, 2, 3, 4
@@ -30,6 +31,9 @@ _HERDR_ERROR_EXITS = {
     "agent_not_found": EXIT_MISSING,
     "agent_not_running": EXIT_DEAD,
     "agent_blocked": EXIT_APPROVAL,
+    "server_not_running": EXIT_SERVER,
+    "tab_not_found": EXIT_MISSING,
+    "workspace_not_found": EXIT_MISSING,
 }
 
 
@@ -108,6 +112,7 @@ class Herdr:
 
     # --- CLI -------------------------------------------------------------
     def _run(self, args, timeout_s):
+        timeout_s = 30 if timeout_s is None else timeout_s
         argv = [self.bin] + [str(a) for a in args]
         try:
             cp = self._runner(argv, env=self.env(), capture_output=True, text=True, timeout=timeout_s)
@@ -116,11 +121,13 @@ class Herdr:
         if cp.returncode == 0:
             return cp
         if cp.returncode == 2:
-            raise HerdrError("usage", (cp.stderr or "").strip() or "herdr usage error: %s" % " ".join(argv))
+            detail = (cp.stderr or "").strip()
+            prefix = ("%s: " % detail) if detail else "herdr usage error: "
+            raise HerdrError("usage", prefix + " ".join(argv))
         try:
             err = json.loads((cp.stderr or "").strip().splitlines()[-1])["error"]
             raise HerdrError(str(err.get("code", "error")), str(err.get("message", "")))
-        except (ValueError, KeyError, IndexError):
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             raise HerdrError("error", (cp.stderr or cp.stdout or "").strip() or "herdr exited %d" % cp.returncode)
 
     def cli(self, *args, timeout_s: float | None = None) -> dict:
@@ -137,7 +144,11 @@ class Herdr:
     def _connect(self, timeout_s):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout_s)
-        s.connect(self.socket_path)
+        try:
+            s.connect(self.socket_path)
+        except Exception:
+            s.close()
+            raise
         return s
 
     @staticmethod
@@ -149,7 +160,10 @@ class Herdr:
         return msg
 
     def request(self, method: str, params: dict, timeout_s: float = 30) -> dict:
-        s = self._connect(timeout_s)
+        try:
+            s = self._connect(timeout_s)
+        except (FileNotFoundError, ConnectionRefusedError) as e:
+            raise ServerUnavailable("herdr socket unavailable at %s: %s" % (self.socket_path, e))
         try:
             rid = "bridge-%s" % uuid.uuid4().hex[:8]
             s.sendall((json.dumps({"id": rid, "method": method, "params": params}) + "\n").encode("utf-8"))
@@ -158,6 +172,8 @@ class Herdr:
             if not line:
                 raise HerdrError("closed", "herdr closed the socket without answering %s" % method)
             return self._parse_response(line).get("result", {})
+        except socket.timeout:
+            raise HerdrError("timeout", "herdr %s timed out after %ss" % (method, timeout_s))
         finally:
             s.close()
 
@@ -180,8 +196,13 @@ class Herdr:
                 raise HerdrError("closed", "no subscribe ack")
             self._parse_response(ack)
             for line in f:
-                if line.strip():
-                    yield json.loads(line.decode("utf-8"))
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line.decode("utf-8"))
+                except ValueError:
+                    break  # truncated/partial line (e.g. socket closed mid-write): end the stream
+                yield event
         finally:
             s.close()
 
@@ -203,7 +224,7 @@ class Herdr:
             try:
                 self.ping()
                 return
-            except (OSError, HerdrError, ValueError):
+            except (OSError, HerdrError, ValueError, ServerUnavailable):
                 time.sleep(poll_s)
         raise ServerUnavailable("herdr server for session %r did not answer within %ss (log: %s)"
                                 % (self.session, wait_s, log_path))
@@ -404,7 +425,7 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
             boxed = _hermes_reply(lines, echo_idx + 1)
             if boxed is not None:
                 return boxed, False
-            return _claude_reply(lines, echo_idx + 1), False  # generic: strip chrome after echo
+            return _claude_reply(lines, echo_idx + 1), True  # generic fallback: no Hermes box found
         return _claude_reply(lines, echo_idx + 1), False
     fresh = _new_text(before, after)
     if fresh is not None:
@@ -513,7 +534,12 @@ class Bridge:
             raise
 
     def pane_is_shell(self, pane_id: str) -> bool:
-        info = self.h.cli("pane", "process-info", "--pane", pane_id)["result"].get("process_info", {})
+        try:
+            info = self.h.cli("pane", "process-info", "--pane", pane_id)["result"].get("process_info", {})
+        except HerdrError as e:
+            if e.herdr_code in ("pane_not_found", "not_found"):
+                return False
+            raise
         fg = info.get("foreground_processes") or []
         return bool(fg) and all(os.path.basename(str(p.get("name", ""))) in SHELL_NAMES for p in fg)
 
@@ -532,6 +558,8 @@ class Bridge:
             fields["tab_id"] = agent["tab_id"]
         if sess:
             fields["agent_session_id"] = sess
+        if not fields:
+            return
         self.store.save(name, **fields)
 
     def resolve(self, name: str):
@@ -584,8 +612,12 @@ class Bridge:
             out = self.h.cli("agent", "explain", name, "--json")
         except HerdrError:
             return None
-        rule = out.get("matched_rule") or (out.get("result") or {}).get("matched_rule")
-        return rule.get("id") if isinstance(rule, dict) else None
+        result = out.get("result") or {}
+        for container in (out, result, result.get("explain") or {}, out.get("explain") or {}):
+            rule = container.get("matched_rule")
+            if isinstance(rule, dict):
+                return rule.get("id")
+        return None
 
     def state(self, name: str):
         a = self.find_agent(name)
@@ -612,8 +644,9 @@ class Bridge:
     def send(self, name: str, text: str, timeout_ms: int):
         state, agent = self.state(name)
         if state != "idle":
-            raise BridgeError("session %r is %s; refusing to send" % (name, state), state_exit(state))
+            raise BridgeError("session %r is %s; refusing to send" % (name, state), state_exit(state) or EXIT_ERROR)
         before = self.read(name)
+        blocked_before_input = False
         try:
             self.h.cli("agent", "prompt", name, text, "--wait", "--timeout", str(timeout_ms),
                        timeout_s=timeout_ms / 1000.0 + 30)
@@ -621,7 +654,7 @@ class Bridge:
             if e.herdr_code == "agent_prompt_stalled":
                 self.h.cli("agent", "wait", name, "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
             elif e.herdr_code == "agent_blocked":
-                pass  # agent is now blocked; fall through to read/state/dialog below
+                blocked_before_input = True  # agent was blocked before it saw any input
             elif e.herdr_code == "timeout":
                 raise BridgeError("timed out after %dms waiting for %r; it may still be working" % (timeout_ms, name), EXIT_TIMEOUT)
             else:
@@ -630,14 +663,16 @@ class Bridge:
         state, agent = self.state(name)
         if agent:
             self.record_session(name, agent)
-        reply, truncated = extract_reply(before, after, text, self.cfg.kind)
         dialog = self.visible(name) if state in ("approval", "secret", "clarify", "blocked") else ""
+        if blocked_before_input:
+            return state, "", False, "MESSAGE NOT DELIVERED: agent was blocked before input\n" + dialog
+        reply, truncated = extract_reply(before, after, text, self.cfg.kind)
         return state, reply, truncated, dialog
 
     def answer(self, name: str, text: str, settle_s: float = 1.0) -> str:
         state, agent = self.state(name)
         if state != "clarify":
-            raise BridgeError("session %r is %s, not clarify; refusing to answer" % (name, state), state_exit(state))
+            raise BridgeError("session %r is %s, not clarify; refusing to answer" % (name, state), state_exit(state) or EXIT_ERROR)
         self.h.cli("pane", "send-text", agent["pane_id"], text)
         self.h.cli("pane", "send-keys", agent["pane_id"], "enter")
         time.sleep(settle_s)
@@ -649,7 +684,7 @@ class Bridge:
     def navigate_menu(self, name: str, target_label: str, max_steps: int = 8, settle_s: float = 0.4) -> str:
         state, _ = self.state(name)
         if state != "approval":
-            raise BridgeError("session %r is %s, not approval; refusing" % (name, state), state_exit(state))
+            raise BridgeError("session %r is %s, not approval; refusing" % (name, state), state_exit(state) or EXIT_ERROR)
         for _ in range(max_steps):
             step = plan_menu_step(self.visible(name), target_label)
             if step is None:
@@ -668,7 +703,8 @@ class Bridge:
             try:
                 self.h.cli("agent", "prompt", name, self.cfg.exit_command)
             except HerdrError as e:
-                if e.herdr_code not in ("agent_not_running", "agent_not_found", "agent_blocked"):
+                if e.herdr_code not in ("agent_not_running", "agent_not_found", "agent_blocked",
+                                        "agent_prompt_stalled", "timeout"):
                     raise
             deadline = time.time() + wait_s
             while time.time() < deadline and self.find_agent(name):
@@ -696,6 +732,9 @@ class Bridge:
         for tab in self.tabs():
             tid = tab.get("tab_id")
             if tid in live_tabs:
+                continue
+            label = tab.get("label")
+            if not label or not NAME_RE.match(label):
                 continue
             ps = panes_by_tab.get(tid, [])
             if ps and all(not p.get("agent") and self.pane_is_shell(p["pane_id"]) for p in ps):

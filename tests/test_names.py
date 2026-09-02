@@ -15,6 +15,11 @@ class NameTests(unittest.TestCase):
             self.assertEqual(cm.exception.code, 2)
 
 
+class ConstantsTests(unittest.TestCase):
+    def test_session_name_alias(self):
+        self.assertEqual(hb.SESSION_NAME, "agents")
+
+
 class ErrorTests(unittest.TestCase):
     def test_exit_code_constants(self):
         self.assertEqual((hb.EXIT_OK, hb.EXIT_ERROR, hb.EXIT_MISSING, hb.EXIT_APPROVAL,
@@ -28,6 +33,9 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(hb.herdr_error_exit("agent_not_found"), 2)
         self.assertEqual(hb.herdr_error_exit("agent_not_running"), 7)
         self.assertEqual(hb.herdr_error_exit("agent_blocked"), 3)
+        self.assertEqual(hb.herdr_error_exit("server_not_running"), 9)
+        self.assertEqual(hb.herdr_error_exit("tab_not_found"), 2)
+        self.assertEqual(hb.herdr_error_exit("workspace_not_found"), 2)
         self.assertEqual(hb.herdr_error_exit("something_else"), 1)
         e = hb.HerdrError("timeout", "wait timed out")
         self.assertEqual(e.code, 6)

@@ -42,6 +42,12 @@ class HermesExtractTests(unittest.TestCase):
         reply, trunc = hb.extract_reply("", after, "ok", "hermes")
         self.assertTrue(trunc)  # Fallback used since no exact match for "ok"
 
+    def test_echo_found_without_hermes_box_falls_back_and_is_truncated(self):
+        after = "● hi\nno box here\n❯\n"
+        reply, trunc = hb.extract_reply("", after, "hi", "hermes")
+        self.assertEqual(reply, "no box here")
+        self.assertTrue(trunc)
+
     def test_new_text_match_with_nothing_new_returns_empty(self):
         before = fx("hermes_before.txt")
         after = fx("hermes_before.txt")

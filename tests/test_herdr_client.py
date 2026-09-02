@@ -1,4 +1,4 @@
-import io, json, os, socket, sys, threading, tempfile, unittest
+import io, json, os, shutil, socket, sys, threading, tempfile, time, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import herdrbridge as hb
 
@@ -32,6 +32,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cm.exception.herdr_code, "pane_not_found")
         self.assertEqual(cm.exception.code, 2)
 
+    def test_cli_non_object_json_on_stderr_raises_generic_herdr_error(self):
+        h, _ = self.make(1, "", "[1]")
+        with self.assertRaises(hb.HerdrError) as cm:
+            h.cli("pane", "get", "w1:p9")
+        self.assertEqual(cm.exception.herdr_code, "error")
+
+    def test_cli_non_dict_error_field_on_stderr_raises_generic_herdr_error(self):
+        h, _ = self.make(1, "", json.dumps({"error": "boom"}))
+        with self.assertRaises(hb.HerdrError) as cm:
+            h.cli("pane", "get", "w1:p9")
+        self.assertEqual(cm.exception.herdr_code, "error")
+
     def test_cli_usage_error_exit_2_maps_to_usage_code(self):
         h, _ = self.make(2, "", "error: unexpected argument")
         with self.assertRaises(hb.HerdrError) as cm:
@@ -39,9 +51,33 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cm.exception.herdr_code, "usage")
         self.assertEqual(cm.exception.code, 1)
 
+    def test_cli_usage_error_message_always_ends_with_joined_argv(self):
+        h, _ = self.make(2, "", "error: unexpected argument")
+        with self.assertRaises(hb.HerdrError) as cm:
+            h.cli("agent", "bogus")
+        self.assertTrue(str(cm.exception).endswith("herdr agent bogus"))
+
+    def test_cli_usage_error_with_empty_stderr_message_ends_with_joined_argv(self):
+        h, _ = self.make(2, "", "")
+        with self.assertRaises(hb.HerdrError) as cm:
+            h.cli("agent", "bogus")
+        self.assertTrue(str(cm.exception).endswith("herdr agent bogus"))
+
     def test_cli_text_returns_stdout_verbatim(self):
         h, _ = self.make(0, "line1\nline2\n")
         self.assertEqual(h.cli_text("agent", "read", "bean"), "line1\nline2\n")
+
+    def test_cli_defaults_timeout_to_30s_when_not_given(self):
+        h, calls = self.make(0, json.dumps({"id": "x", "result": {}}))
+        h.cli("agent", "list")
+        _, kw = calls[0]
+        self.assertEqual(kw["timeout"], 30)
+
+    def test_cli_passes_through_caller_supplied_timeout(self):
+        h, calls = self.make(0, json.dumps({"id": "x", "result": {}}))
+        h.cli("agent", "list", timeout_s=5)
+        _, kw = calls[0]
+        self.assertEqual(kw["timeout"], 5)
 
     def test_cli_timeout_with_non_string_args_raises_herdr_error(self):
         import subprocess
@@ -76,7 +112,9 @@ class FakeSocketServer(threading.Thread):
 
 class SocketTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(); self.path = os.path.join(self.tmp, "s.sock")
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.path = os.path.join(self.tmp, "s.sock")
 
     def test_request_returns_result(self):
         def handler(req):
@@ -85,12 +123,35 @@ class SocketTests(unittest.TestCase):
         h = hb.Herdr("t", socket_path=self.path)
         self.assertEqual(h.ping()["version"], "0.8.2")
 
+    def test_request_missing_socket_raises_server_unavailable(self):
+        h = hb.Herdr("t", socket_path=os.path.join(self.tmp, "missing.sock"))
+        with self.assertRaises(hb.ServerUnavailable):
+            h.request("ping", {})
+
+    def test_request_connection_refused_raises_server_unavailable(self):
+        # Bind-and-close a socket path: connecting to it afterwards raises ConnectionRefusedError.
+        path = os.path.join(self.tmp, "refused.sock")
+        srv = socket.socket(socket.AF_UNIX); srv.bind(path); srv.listen(1); srv.close()
+        h = hb.Herdr("t", socket_path=path)
+        with self.assertRaises(hb.ServerUnavailable):
+            h.request("ping", {})
+
     def test_request_error_raises(self):
         def handler(req):
             yield {"id": req["id"], "error": {"code": "not_found", "message": "nope"}}
         srv = FakeSocketServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
         with self.assertRaises(hb.HerdrError):
             hb.Herdr("t", socket_path=self.path).request("pane.get", {"pane_id": "w1:p1"})
+
+    def test_request_socket_timeout_raises_herdr_timeout_error(self):
+        def handler(req):
+            time.sleep(1)
+            return
+            yield  # pragma: no cover - makes this a generator; never reached
+        srv = FakeSocketServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
+        with self.assertRaises(hb.HerdrError) as cm:
+            hb.Herdr("t", socket_path=self.path).request("ping", {}, timeout_s=0.05)
+        self.assertEqual(cm.exception.herdr_code, "timeout")
 
     def test_subscribe_yields_events_after_ack(self):
         def handler(req):
@@ -100,6 +161,26 @@ class SocketTests(unittest.TestCase):
         gen = hb.Herdr("t", socket_path=self.path).subscribe([{"type": "pane.agent_status_changed", "pane_id": "w1:p1"}])
         ev = next(gen)
         self.assertEqual(ev["data"]["agent_status"], "blocked")
+
+    def test_subscribe_stops_on_truncated_line_instead_of_raising(self):
+        def handler(req):
+            yield {"id": req["id"], "result": {"type": "subscribed"}}
+            yield {"event": "pane.agent_status_changed", "data": {"pane_id": "w1:p1"}}
+        class TruncatingServer(FakeSocketServer):
+            def run(self):
+                conn, _ = self.srv.accept()
+                f = conn.makefile("rwb")
+                for line in f:
+                    for out in self.handler(json.loads(line)):
+                        f.write((json.dumps(out) + "\n").encode()); f.flush()
+                    f.write(b'{"event": "trunc"'); f.flush()  # no trailing newline/close: truncated
+                    break
+                conn.close()
+        srv = TruncatingServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
+        gen = hb.Herdr("t", socket_path=self.path).subscribe([{"type": "pane.agent_status_changed"}])
+        events = list(gen)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["data"]["pane_id"], "w1:p1")
 
     def test_ensure_server_spawns_when_ping_fails(self):
         spawned = []
