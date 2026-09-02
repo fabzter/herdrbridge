@@ -109,7 +109,7 @@ class Herdr:
         try:
             cp = self._runner(argv, env=self.env(), capture_output=True, text=True, timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            raise HerdrError("timeout", "herdr %s exceeded %ss" % (" ".join(args[:2]), timeout_s))
+            raise HerdrError("timeout", "herdr %s exceeded %ss" % (" ".join(argv[1:3]), timeout_s))
         if cp.returncode == 0:
             return cp
         if cp.returncode == 2:
@@ -192,9 +192,9 @@ class Herdr:
         log_dir = os.path.dirname(self.socket_path)
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, "herdr-server.log")
-        log = open(log_path, "ab")
-        self._spawner([self.bin, "server"], env=self.env(), stdin=subprocess.DEVNULL,
-                      stdout=log, stderr=log, start_new_session=True)
+        with open(log_path, "ab") as log:
+            self._spawner([self.bin, "server"], env=self.env(), stdin=subprocess.DEVNULL,
+                          stdout=log, stderr=log, start_new_session=True)
         deadline = time.time() + wait_s
         while time.time() < deadline:
             try:

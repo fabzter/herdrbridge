@@ -43,6 +43,16 @@ class CliTests(unittest.TestCase):
         h, _ = self.make(0, "line1\nline2\n")
         self.assertEqual(h.cli_text("agent", "read", "bean"), "line1\nline2\n")
 
+    def test_cli_timeout_with_non_string_args_raises_herdr_error(self):
+        import subprocess
+        def runner(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, 5)
+        h = hb.Herdr("bridge-test-1", runner=runner)
+        with self.assertRaises(hb.HerdrError) as cm:
+            h.cli(123, "read", timeout_s=5)
+        self.assertEqual(cm.exception.herdr_code, "timeout")
+        self.assertEqual(cm.exception.code, 6)
+
     def test_socket_path_for_named_and_default_session(self):
         home = os.path.expanduser("~")
         self.assertEqual(hb.Herdr("agents").socket_path, os.path.join(home, ".config", "herdr", "sessions", "agents", "herdr.sock"))
