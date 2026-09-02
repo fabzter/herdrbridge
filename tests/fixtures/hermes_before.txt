@@ -1,0 +1,8 @@
+│                                   35 tools · 139 skills · 1 MCP servers · /help for       │
+│                                   commands                                                │
+│                                   ⚠ 1 commit behind — run hermes update to update         │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+✦ Tip: Smart approval mode uses an LLM to auto-approve safe commands and flag dangerous ones.
+

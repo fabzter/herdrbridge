@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────────╮
+│ Claude Code v2.1.236                                          │
+╰──────────────────────────────────────────────────────────────╯
+
+> Summarize what the file README.md is about in one sentence.
+
+⏺ Read(README.md)
+  ⎿  Read 41 lines
+
+⏺ README.md describes a Hermes Agent skill that lets Hermes hold a continuing,
+  read-only conversation with Claude Code.
+
+╭──────────────────────────────────────────────────────────────╮
+│ ❯                                                            │
+╰──────────────────────────────────────────────────────────────╯
+  ? for shortcuts

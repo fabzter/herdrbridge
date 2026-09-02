@@ -301,3 +301,103 @@ def classify(agent_status: str | None, matched_rule_id: str | None) -> str:
 
 def state_exit(state: str) -> int:
     return STATE_EXIT.get(state, EXIT_ERROR)
+
+
+# --- reply extraction for Hermes REPL and Claude alt-screen reads --------
+
+_BOX_EDGE = re.compile(r"^\s*[╭╰┌└├┬┴┼╮╯┐┘─━]{1}")
+_HERMES_ECHO = re.compile(r"^\s*●\s*(.*)$")
+_HERMES_BOX_OPEN = re.compile(r"^\s*╭─.*Hermes")
+_HERMES_BOX_CLOSE = re.compile(r"^\s*╰")
+_PROMPT_LINE = re.compile(r"^\s*(│\s*)?❯\s*(│\s*)?$")
+_CLAUDE_ECHO = re.compile(r"^\s*>\s*(.*)$")
+_CLAUDE_CHROME = re.compile(r"(\? for shortcuts|esc to interrupt|bypass permissions|⏵⏵|shift\+tab to cycle)", re.I)
+
+
+def _first_line(prompt: str) -> str:
+    for ln in prompt.splitlines():
+        if ln.strip():
+            return ln.strip()
+    return prompt.strip()
+
+
+def _strip_bar(line: str) -> str:
+    s = line.strip()
+    if s.startswith("│"):
+        s = s[1:]
+    if s.endswith("│"):
+        s = s[:-1]
+    return s.strip()
+
+
+def _hermes_reply(lines: list, start: int) -> str | None:
+    """Text inside the last `╭─ … Hermes …╮ … ╰…╯` box after `start`."""
+    open_idx = None
+    for i in range(start, len(lines)):
+        if _HERMES_BOX_OPEN.match(lines[i]):
+            open_idx = i
+    if open_idx is None:
+        return None
+    body = []
+    for ln in lines[open_idx + 1:]:
+        if _HERMES_BOX_CLOSE.match(ln):
+            break
+        body.append(_strip_bar(ln))
+    return "\n".join(body).strip()
+
+
+def _claude_reply(lines: list, start: int) -> str:
+    body = []
+    for ln in lines[start:]:
+        if _PROMPT_LINE.match(ln) or "❯" in ln:
+            break
+        if _BOX_EDGE.match(ln) and not ln.strip().startswith("│"):
+            # top/bottom edge of the input box or a tool box: skip the edge itself
+            continue
+        if _CLAUDE_CHROME.search(ln):
+            continue
+        s = ln.rstrip()
+        s = re.sub(r"^\s*⏺\s?", "", s)
+        body.append(s)
+    text = "\n".join(body)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _new_text(before: str, after: str) -> str | None:
+    """Return the part of `after` that follows the last 5 non-empty lines of `before`, or None."""
+    tail = [ln for ln in before.splitlines() if ln.strip()][-5:]
+    if not tail:
+        return None
+    a_lines = after.splitlines()
+    # Track (original_index, line_content) for non-empty lines to allow searching with blank-line gaps
+    a_nonempty = [(i, ln) for i, ln in enumerate(a_lines) if ln.strip()]
+    n = len(tail)
+    for i in range(len(a_nonempty) - n, -1, -1):
+        if [ln for _, ln in a_nonempty[i:i + n]] == tail:
+            # Found all 5 lines; return everything after the last one
+            last_idx = a_nonempty[i + n - 1][0]
+            return "\n".join(a_lines[last_idx + 1:]).strip()
+    return None
+
+
+def extract_reply(before: str, after: str, prompt: str, kind: str):
+    lines = after.splitlines()
+    anchor = _first_line(prompt)
+    echo_re = _HERMES_ECHO if kind == "hermes" else _CLAUDE_ECHO
+    echo_idx = None
+    for i, ln in enumerate(lines):
+        m = echo_re.match(ln)
+        if m and anchor and m.group(1).strip().startswith(anchor[:60]):
+            echo_idx = i
+    if echo_idx is not None:
+        if kind == "hermes":
+            boxed = _hermes_reply(lines, echo_idx + 1)
+            if boxed is not None:
+                return boxed, False
+            return _claude_reply(lines, echo_idx + 1), False  # generic: strip chrome after echo
+        return _claude_reply(lines, echo_idx + 1), False
+    fresh = _new_text(before, after)
+    if fresh:
+        return fresh, True
+    return "\n".join(lines[-120:]).strip(), True
