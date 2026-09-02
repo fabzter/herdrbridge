@@ -415,18 +415,31 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
 
 MenuRow = collections.namedtuple("MenuRow", "number label selected")
 _MENU_ROW = re.compile(r"^\s*(?P<cur>[▸❯>])?\s*(?P<num>\d{1,2})\.\s+(?P<label>\S.*?)\s*$")
+_MENU_FOOTER = re.compile(r"(↑/↓|enter confirm|enter to confirm|show full command)", re.I)
 
 
 def parse_menu(visible: str) -> list:
+    """Parse a Hermes approval menu; returns [] unless the screen ends in a menu footer with contiguous numbered rows above it."""
+    lines = visible.splitlines()
+    footer_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if _MENU_FOOTER.search(lines[i]):
+            footer_idx = i
+            break
+    if footer_idx is None:
+        return []
     rows = []
-    for ln in visible.splitlines():
-        m = _MENU_ROW.match(ln)
+    for i in range(footer_idx - 1, -1, -1):
+        m = _MENU_ROW.match(lines[i])
         if m:
             rows.append(MenuRow(int(m.group("num")), m.group("label"), bool(m.group("cur"))))
-    return rows
+        elif lines[i].strip():
+            break
+    return list(reversed(rows))
 
 
 def plan_menu_step(visible: str, target: str) -> str | None:
+    """Plan one navigation step to reach target; returns None unless the screen ends in a menu footer with contiguous numbered rows above it."""
     rows = parse_menu(visible)
     if len(rows) < 2:
         return None

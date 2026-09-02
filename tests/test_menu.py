@@ -40,6 +40,25 @@ class MenuTests(unittest.TestCase):
         menu = fx("hermes_approval_menu.txt").replace("▸ 1.", "> 1.")
         self.assertEqual(hb.plan_menu_step(menu, "Allow once"), "enter")
 
+    def test_numbered_lines_in_command_preview_are_ignored(self):
+        menu = "Command preview:\n  1. rm -rf /tmp/a\n  2. echo done\n\n" + fx("hermes_approval_menu.txt")
+        rows = hb.parse_menu(menu)
+        self.assertEqual([(r.number, r.label, r.selected) for r in rows],
+                         [(1, "Allow once", True), (2, "Allow for this session", False),
+                          (3, "Add to permanent allowlist", False), (4, "Deny", False)])
+        self.assertEqual(hb.plan_menu_step(menu, "Deny"), "down")
+
+    def test_refuse_without_footer(self):
+        menu = fx("hermes_approval_menu.txt")
+        menu_no_footer = "\n".join(menu.splitlines()[:-1])
+        self.assertEqual(hb.parse_menu(menu_no_footer), [])
+        self.assertIsNone(hb.plan_menu_step(menu_no_footer, "Deny"))
+
+    def test_footer_variants(self):
+        menu = fx("hermes_approval_menu.txt").replace("↑/↓ to select · Enter confirm · s show full command", "Enter to confirm")
+        self.assertEqual(len(hb.parse_menu(menu)), 4)
+        self.assertEqual(hb.plan_menu_step(menu, "Deny"), "down")
+
 
 if __name__ == "__main__":
     unittest.main()
