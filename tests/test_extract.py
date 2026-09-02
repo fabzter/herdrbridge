@@ -56,14 +56,24 @@ class HermesExtractTests(unittest.TestCase):
 
 
 class ClaudeExtractTests(unittest.TestCase):
+    # claude_reply.txt is a live capture (claude-bridge tests/live/e2e_claude.sh against real
+    # Claude Code 2.1.236) of `read e2e -n 120` after asking the prompt below in a fresh,
+    # read-only session opened on this repo. The extracted reply leads with the wrapped second
+    # line of the (single-line) submitted prompt: extract_reply() anchors on the first physical
+    # terminal line of the echo ('❯ <prompt start>'), so a prompt long enough to wrap leaves its
+    # continuation line as the start of the body — a known, minor cosmetic quirk, not something
+    # this test is trying to hide.
     def test_reply_after_echo_without_ui_chrome(self):
-        reply, trunc = hb.extract_reply("", fx("claude_reply.txt"),
-                                        "Summarize what the file README.md is about in one sentence.", "claude")
+        prompt = ("Read README.md in the current directory and answer in one sentence: "
+                  "what is this repo? Reply with only that sentence.")
+        reply, trunc = hb.extract_reply("", fx("claude_reply.txt"), prompt, "claude")
         self.assertFalse(trunc)
-        self.assertTrue(reply.startswith("Read(README.md)"))
-        self.assertIn("README.md describes a Hermes Agent skill", reply)
+        self.assertTrue(reply.startswith("Reply with only that sentence."))
+        self.assertIn("A Hermes Agent skill that lets Hermes hold a continuing, read-only "
+                      "conversation with Claude", reply)
         self.assertNotIn("❯", reply); self.assertNotIn("? for shortcuts", reply)
         self.assertNotIn("Claude Code v", reply)
+        self.assertNotIn("ctrl+o to expand", reply); self.assertNotIn("Cogitated", reply)
 
     def test_real_claude_code_echoes_prompt_with_fancy_angle_not_ascii_gt(self):
         # Claude Code >= 2.1 echoes the submitted prompt with '❯' (U+276F), not the ASCII

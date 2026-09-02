@@ -1,16 +1,31 @@
-╭──────────────────────────────────────────────────────────────╮
-│ Claude Code v2.1.236                                          │
-╰──────────────────────────────────────────────────────────────╯
+export plugin already enabled
+fabzter@fabrizio-mac-mini hermes-claude-bridge % claude --allowedTools Read,Grep,Glob,WebSearch,WebFetch --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit
+Permission deny rule "MultiEdit" matches no known tool — check for typos.
+╭─── Claude Code v2.1.236 ───────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started              │
+│               Welcome back Fabrizio!               │ Run /init to create a CLAUDE.md file… │
+│                                                    │ ───────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                            │
+│                      ▝▜██████▀                     │ Fixed Claude Code failing to launch … │
+│                        ▝▝ ▝▝                       │ Fixed remote and scheduled sessions … │
+│   Opus 5 (1M context) with high… · Claude Team ·   │ Added Claude Fable 5.1 (`claude-fabl… │
+│   Luca                                             │ /release-notes for more               │
+│             ~/src/hermes-claude-bridge             │                                       │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
 
-> Summarize what the file README.md is about in one sentence.
 
-⏺ Read(README.md)
-  ⎿  Read 41 lines
+❯ Read README.md in the current directory and answer in one sentence: what is this repo?
+  Reply with only that sentence.
 
-⏺ README.md describes a Hermes Agent skill that lets Hermes hold a continuing,
-  read-only conversation with Claude Code.
+  Read 1 file (ctrl+o to expand)
 
-╭──────────────────────────────────────────────────────────────╮
-│ ❯                                                            │
-╰──────────────────────────────────────────────────────────────╯
-  ? for shortcuts
+⏺ A Hermes Agent skill that lets Hermes hold a continuing, read-only conversation with Claude
+  Code by driving the claude -p CLI with persistent session IDs.
+
+✻ Cogitated for 4s
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with CL…
+  ⏵⏵ auto mode on (shift+tab to cycle)                                      ● high · /effort
