@@ -81,14 +81,14 @@ class SocketTests(unittest.TestCase):
     def test_request_returns_result(self):
         def handler(req):
             self.assertEqual(req["method"], "ping"); yield {"id": req["id"], "result": {"type": "pong", "version": "0.8.2"}}
-        FakeSocketServer(self.path, handler).start()
+        srv = FakeSocketServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
         h = hb.Herdr("t", socket_path=self.path)
         self.assertEqual(h.ping()["version"], "0.8.2")
 
     def test_request_error_raises(self):
         def handler(req):
             yield {"id": req["id"], "error": {"code": "not_found", "message": "nope"}}
-        FakeSocketServer(self.path, handler).start()
+        srv = FakeSocketServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
         with self.assertRaises(hb.HerdrError):
             hb.Herdr("t", socket_path=self.path).request("pane.get", {"pane_id": "w1:p1"})
 
@@ -96,7 +96,7 @@ class SocketTests(unittest.TestCase):
         def handler(req):
             yield {"id": req["id"], "result": {"type": "subscribed"}}
             yield {"event": "pane.agent_status_changed", "data": {"pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "blocked"}}
-        FakeSocketServer(self.path, handler).start()
+        srv = FakeSocketServer(self.path, handler); self.addCleanup(srv.srv.close); srv.start()
         gen = hb.Herdr("t", socket_path=self.path).subscribe([{"type": "pane.agent_status_changed", "pane_id": "w1:p1"}])
         ev = next(gen)
         self.assertEqual(ev["data"]["agent_status"], "blocked")
