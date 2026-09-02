@@ -109,12 +109,16 @@ class RecordSessionTests(unittest.TestCase):
         self.assertEqual(b.store.load("x"), {})
 
 
+READY_SHELL = ok("pane_process_info", process_info={"foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})
+
+
 class StartTests(unittest.TestCase):
     def test_start_missing_creates_tab_and_resumes_stored_session(self):
         started = agent("bean", pane="w1:p5", tab="w1:t3", session="S1")
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3", "label": "bean"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [READY_SHELL],
                        "agent start": [ok("agent_started", agent=started, argv=["hermes", "chat"])]})
         b = bridge(h); b.store.save("bean", agent_session_id="S1")
         a = b.start("bean", ["chat", "--cli", "--source", "tool"])
@@ -129,6 +133,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [READY_SHELL],
                        "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
         b = bridge(h); b.store.save("bean", agent_session_id="S1")
         b.start("bean", ["chat"], fresh=True)
@@ -148,6 +153,7 @@ class StartTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [READY_SHELL],
                        "agent start": [hb.HerdrError("agent_not_ready", "still booting")]})
         b = bridge(h)
         a = b.start("bean", ["chat"])
@@ -155,6 +161,28 @@ class StartTests(unittest.TestCase):
         st = b.store.load("bean")
         self.assertEqual(st["tab_id"], "w1:t3")
         self.assertEqual(st["pane_id"], "w1:p5")
+
+    def test_start_waits_for_a_freshly_created_pane_to_stop_being_busy(self):
+        # A just-created pane's shell can still be mid-startup (e.g. a slow zsh/pyenv rehash),
+        # so its foreground process isn't a plain shell yet; `agent start` would fail
+        # immediately with agent_pane_busy if fired right away. start() must poll
+        # pane_is_shell() until it settles before ever calling `agent start`.
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])],
+                       "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [
+                           ok("pane_process_info", process_info={"foreground_processes": [
+                               {"name": "sleep", "argv": ["sleep", "0.1"]},
+                               {"name": "bash", "argv": ["bash", "pyenv-rehash"]}]}),
+                           READY_SHELL,
+                       ],
+                       "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
+        b = bridge(h)
+        b.start("bean", ["chat"])
+        pinfo_idx = [i for i, c in enumerate(h.calls) if c[:3] == ("cli", "pane", "process-info")]
+        start_idx = next(i for i, c in enumerate(h.calls) if c[:3] == ("cli", "agent", "start"))
+        self.assertGreaterEqual(len(pinfo_idx), 2)
+        self.assertGreater(start_idx, pinfo_idx[-1])  # agent start only fired after the pane settled
 
 
 class ExplainRuleTests(unittest.TestCase):

@@ -550,6 +550,16 @@ class Bridge:
                          "--cwd", cwd, "--label", name, "--no-focus")["result"]
         return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
 
+    def _await_shell_ready(self, pane_id: str, wait_s: float = 15, poll_s: float = 0.3) -> None:
+        """A just-created pane's shell may still be mid-startup (slow rc files, e.g. a pyenv
+        rehash) with something other than a plain shell in the foreground; `agent start`
+        fails immediately with `agent_pane_busy` in that case instead of waiting. Poll until
+        the pane settles into a plain shell, or give up after `wait_s` and let `agent start`
+        raise its own error."""
+        deadline = time.time() + wait_s
+        while not self.pane_is_shell(pane_id) and time.time() < deadline:
+            time.sleep(poll_s)
+
     # --- session identity ---------------------------------------------------
     def record_session(self, name: str, agent: dict) -> None:
         sess = (agent.get("agent_session") or {}).get("value")
@@ -594,6 +604,7 @@ class Bridge:
         else:
             tab_id, pane_id = self._create_tab(name, cwd or st.get("cwd") or self.cfg.default_cwd)
             self.store.save(name, tab_id=tab_id, pane_id=pane_id, cwd=cwd or st.get("cwd") or self.cfg.default_cwd)
+            self._await_shell_ready(pane_id)
         args = list(launch_args)
         if st.get("agent_session_id"):
             args += [resume_flag, st["agent_session_id"]]
