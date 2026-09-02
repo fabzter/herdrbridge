@@ -6,6 +6,7 @@ Stdlib only; Python 3.9+.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -204,3 +205,56 @@ class Herdr:
                 time.sleep(poll_s)
         raise ServerUnavailable("herdr server for session %r did not answer within %ss (log: %s)"
                                 % (self.session, wait_s, log_path))
+
+
+class StateStore:
+    """One JSON file per session name under `dir`; migrates old `<name>.session-id` files."""
+
+    def __init__(self, dir: str):
+        self.dir = dir
+
+    def _path(self, name: str) -> str:
+        return os.path.join(self.dir, "%s.json" % name)
+
+    def load(self, name: str) -> dict:
+        p = self._path(name)
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                try:
+                    return json.load(f)
+                except ValueError:
+                    return {}
+        legacy = os.path.join(self.dir, "%s.session-id" % name)
+        if os.path.exists(legacy):
+            with open(legacy, "r", encoding="utf-8") as f:
+                sid = f.read().strip()
+            if sid:
+                return self.save(name, agent_session_id=sid, migrated_from="session-id")
+        return {}
+
+    def save(self, name: str, **fields) -> dict:
+        os.makedirs(self.dir, exist_ok=True)
+        data = self.load(name) if os.path.exists(self._path(name)) else {}
+        for k, v in fields.items():
+            if v is None:
+                data.pop(k, None)
+            else:
+                data[k] = v
+        data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tmp = self._path(name) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1, sort_keys=True)
+        os.replace(tmp, self._path(name))
+        return data
+
+    def delete(self, name: str) -> bool:
+        p = self._path(name)
+        if os.path.exists(p):
+            os.remove(p)
+            return True
+        return False
+
+    def names(self) -> list:
+        if not os.path.isdir(self.dir):
+            return []
+        return sorted(f[:-5] for f in os.listdir(self.dir) if f.endswith(".json"))
