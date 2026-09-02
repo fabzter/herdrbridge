@@ -216,6 +216,18 @@ class SocketTests(unittest.TestCase):
             h.ensure_server(wait_s=0.05, poll_s=0.01)
         self.assertEqual(len(spawned), 1)
 
+    def test_ensure_server_uses_private_spawn_log_and_rotates(self):
+        spawned = []
+        sock = os.path.join(self.tmp, "missing.sock")
+        big = os.path.join(self.tmp, "herdr-server.spawn.log")
+        with open(big, "wb") as f: f.write(b"x" * (6 * 1024 * 1024))
+        h = hb.Herdr("t", socket_path=sock, spawner=lambda *a, **k: spawned.append(k))
+        with self.assertRaises(hb.ServerUnavailable):
+            h.ensure_server(wait_s=0.05, poll_s=0.01)
+        self.assertEqual(spawned[0]["stdout"].name, big)
+        self.assertTrue(os.path.exists(big + ".1"))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "herdr-server.log")))
+
 
 if __name__ == "__main__":
     unittest.main()

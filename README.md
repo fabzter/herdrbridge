@@ -17,7 +17,10 @@ file. The **client** (`Herdr`) wraps the `herdr` binary and its socket:
 `cli`/`cli_text` run CLI subcommands and parse JSON or return raw stdout,
 `request`/`subscribe` speak the socket protocol directly for one-shot calls
 and event streams, and `ensure_server` starts the per-session herdr server
-if it isn't already answering. The **state store** (`StateStore`) persists
+if it isn't already answering, logging its stdio to its own
+`herdr-server.spawn.log` (rotated via `rotate_log` before each spawn, kept
+separate from herdr's own `herdr-server.log` in the same directory). The
+**state store** (`StateStore`) persists
 one small JSON file per session name — pane/tab ids and the agent's session
 id — so a session can be found again after herdr or the bridge process
 restarts, and it transparently migrates the previous generation's

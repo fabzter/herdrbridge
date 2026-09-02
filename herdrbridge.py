@@ -80,6 +80,21 @@ def validate_name(name: str) -> str:
     return name
 
 
+def rotate_log(path: str, max_bytes: int = 5 * 1024 * 1024, keep: int = 2) -> bool:
+    """Rotate `path` to `.1`, `.1` to `.2`, … when it exceeds `max_bytes`. Returns True if rotated."""
+    try:
+        if os.path.getsize(path) <= max_bytes:
+            return False
+    except OSError:
+        return False
+    for i in range(keep, 0, -1):
+        src = path if i == 1 else "%s.%d" % (path, i - 1)
+        dst = "%s.%d" % (path, i)
+        if os.path.exists(src):
+            os.replace(src, dst)
+    return True
+
+
 class Herdr:
     """Thin client for one named herdr session: CLI wrappers + raw socket."""
 
@@ -216,7 +231,8 @@ class Herdr:
             pass
         log_dir = os.path.dirname(self.socket_path)
         os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "herdr-server.log")
+        log_path = os.path.join(log_dir, "herdr-server.spawn.log")
+        rotate_log(log_path)
         with open(log_path, "ab") as log:
             self._spawner([self.bin, "server"], env=self.env(), stdin=subprocess.DEVNULL,
                           stdout=log, stderr=log, start_new_session=True)
