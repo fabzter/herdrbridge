@@ -17,6 +17,12 @@ class RotateLogTests(unittest.TestCase):
     def test_under_threshold_is_noop(self):
         self.write(self.p, 5); self.assertFalse(hb.rotate_log(self.p, max_bytes=10)); self.assertTrue(os.path.exists(self.p))
 
+    def test_keep_less_than_one_is_noop(self):
+        self.write(self.p, 20)
+        self.assertFalse(hb.rotate_log(self.p, max_bytes=10, keep=0))
+        self.assertTrue(os.path.exists(self.p))
+        self.assertFalse(os.path.exists(self.p + ".1"))
+
     def test_over_threshold_rotates_and_keeps_n(self):
         self.write(self.p, 20); self.assertTrue(hb.rotate_log(self.p, max_bytes=10, keep=2))
         self.assertFalse(os.path.exists(self.p)); self.assertTrue(os.path.exists(self.p + ".1"))

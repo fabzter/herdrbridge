@@ -82,6 +82,29 @@ class WorkspaceRetryTests(unittest.TestCase):
         tab_calls = [c for c in h.calls if c[:3] == ("cli", "tab", "list")]
         self.assertEqual(len(tab_calls), 2)  # exactly one retry, no infinite loop
 
+    def test_agents_retries_after_workspace_vanished(self):
+        h = self._two_workspace_h(**{
+            "agent list": [hb.HerdrError("workspace_not_found", "gone"),
+                          ok("agent_list", agents=[agent("bean", ws="w2")])]})
+        b = bridge(h)
+        agents_result = b.agents()
+        self.assertEqual([a["name"] for a in agents_result], ["bean"])
+        agent_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(agent_calls), 2)
+
+    def test_agents_does_not_retry_on_plain_not_found(self):
+        # `agents()` retries only on `workspace_not_found` (the cached workspace itself is
+        # gone) — a plain `not_found` from `agent list` means something else vanished and
+        # must propagate without triggering a `workspace list` refresh.
+        h = self._two_workspace_h(**{
+            "agent list": [hb.HerdrError("not_found", "no such thing")]})
+        b = bridge(h)
+        with self.assertRaises(hb.HerdrError) as cm:
+            b.agents()
+        self.assertEqual(cm.exception.herdr_code, "not_found")
+        agent_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(agent_calls), 1)  # no retry, so no second `agent list` call
+
 
 class ResolveTests(unittest.TestCase):
     def test_live_agent_by_name_in_workspace(self):
@@ -454,6 +477,15 @@ class AnswerTests(unittest.TestCase):
         self.assertLess(elapsed, 0.05)  # patched clock/sleep: no real time should have passed
 
 
+class _SlowWaitHerdr(FakeHerdr):
+    """Wraps `agent wait` to also consume a wall-clock tick (via `hb._now`) before it fails,
+    simulating a call that blocked for a while before the socket dropped mid-call."""
+    def cli(self, *args, timeout_s=None):
+        if args[:2] == ("agent", "wait"):
+            hb._now()
+        return super().cli(*args, timeout_s=timeout_s)
+
+
 class WaitStatusTests(unittest.TestCase):
     def test_happy_path_uses_cli_wait_then_returns_state(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
@@ -524,6 +556,40 @@ class WaitStatusTests(unittest.TestCase):
         with self.assertRaises(hb.HerdrError) as cm:
             b.wait_status("bean", timeout_ms=5000, poll_s=0)
         self.assertEqual(cm.exception.herdr_code, "agent_not_found")
+
+    def test_deadline_computed_before_primary_wait_so_budget_is_shared(self):
+        # `agent wait` itself can block for a while before the socket drops mid-call; the
+        # combined budget for `agent wait` + the polling fallback must still be `timeout_ms`
+        # total, not a fresh `timeout_ms` handed to the fallback on top of what `agent wait`
+        # already spent. Simulated here by having the primary call itself advance the clock
+        # (via `_SlowWaitHerdr`) before it raises.
+        h = _SlowWaitHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                            "agent list": [ok("agent_list", agents=[agent("bean", status="working")]),
+                                          ok("agent_list", agents=[agent("bean", status="working")])],
+                            "agent wait": [hb.HerdrError("closed", "herdr closed the socket without answering")]})
+        b = bridge(h)
+        clock_values = iter([0.0, 0.9, 1.5])
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: None), \
+             unittest.mock.patch.object(hb, "_now", lambda: next(clock_values, 100.0)):
+            with self.assertRaises(hb.BridgeError) as cm:
+                b.wait_status("bean", timeout_ms=1000, poll_s=0.5)
+        self.assertEqual(cm.exception.code, hb.EXIT_TIMEOUT)
+        list_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(list_calls), 1)  # deadline shared with the primary call; no extra poll
+
+    def test_fallback_sleep_floor_prevents_busy_spin_when_poll_s_is_zero(self):
+        agents_seq = [agent("bean", status="working"), agent("bean", status="idle")]
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[a]) for a in agents_seq],
+                       "agent wait": [hb.HerdrError("closed", "herdr closed the socket without answering")]})
+        b = bridge(h)
+        sleeps = []
+        clock = {"t": 0.0}
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: (sleeps.append(s), clock.__setitem__("t", clock["t"] + s))), \
+             unittest.mock.patch.object(hb, "_now", lambda: clock["t"]):
+            state, a = b.wait_status("bean", timeout_ms=60000, poll_s=0)
+        self.assertEqual(state, "idle")
+        self.assertEqual(sleeps, [0.05])  # poll_s=0 floored to 0.05, not a busy-spin
 
 
 class MenuNavTests(unittest.TestCase):
@@ -665,6 +731,7 @@ class NameValidationAtEntryPointsTests(unittest.TestCase):
         ("read", ()),
         ("visible", ()),
         ("wait", (10,)),  # timeout_ms=10
+        ("wait_status", ()),
         ("send", ("x", 10)),  # text, timeout_ms
         ("answer", ("y",)),  # text
         ("navigate_menu", ("Deny",)),  # target_label

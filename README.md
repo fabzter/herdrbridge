@@ -19,7 +19,10 @@ file. The **client** (`Herdr`) wraps the `herdr` binary and its socket:
 and event streams, and `ensure_server` starts the per-session herdr server
 if it isn't already answering, logging its stdio to its own
 `herdr-server.spawn.log` (rotated via `rotate_log` before each spawn, kept
-separate from herdr's own `herdr-server.log` in the same directory). The
+separate from herdr's own `herdr-server.log` in the same directory) —
+`rotate_log(path, max_bytes=5 MiB, keep=2) -> bool` rotates `path` to `.1`
+through `.keep` and returns whether it rotated, a no-op (`False`) when the
+file is missing, under `max_bytes`, or `keep < 1`. The
 **state store** (`StateStore`) persists
 one small JSON file per session name — pane/tab ids and the agent's session
 id — so a session can be found again after herdr or the bridge process

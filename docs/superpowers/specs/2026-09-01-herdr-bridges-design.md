@@ -117,7 +117,9 @@ Every subcommand runs `ensure_server()` first:
 1. `ping` over the `agents` socket. On success continue.
 2. Otherwise spawn `HERDR_SESSION=agents herdr server` detached
    (`start_new_session=True`, stdio to
-   `~/.config/herdr/sessions/agents/herdr-server.log`), then poll `ping` up to
+   `~/.config/herdr/sessions/agents/herdr-server.spawn.log`, rotated by
+   `rotate_log` before each spawn and kept separate from herdr's own
+   `herdr-server.log` in the same directory), then poll `ping` up to
    10 s. Verified: `herdr server` honors `HERDR_SESSION`, and the named
    server restores its saved layout and agents on start without any client.
 3. Failure exits 9 (`server_unavailable`) with the log path in the message.
@@ -434,8 +436,10 @@ invocation via `python3 ~/.hermes/skills/claude-bridge/scripts/claude-bridge`.
   `agent_not_running` → 7; anything else → 1 with the herdr message.
 - herdr CLI exit 2 (usage) is a bridge bug → exit 1 with the command line
   printed, so it is visible in logs.
-- Socket disconnects mid-`events.wait` fall back to polling `agent get`
-  every 2 s until the caller's timeout.
+- `Bridge.wait_status` prefers the CLI `agent wait`; if that call fails for a
+  reason unrelated to the wait outcome (e.g. the socket disconnects
+  mid-call), it falls back to polling `state()` every `poll_s` (default 2 s)
+  until the caller's timeout.
 - The bridge never retries `agent prompt` on its own (a retry re-sends the
   message).
 

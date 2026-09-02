@@ -86,7 +86,10 @@ def validate_name(name: str) -> str:
 
 
 def rotate_log(path: str, max_bytes: int = 5 * 1024 * 1024, keep: int = 2) -> bool:
-    """Rotate `path` to `.1`, `.1` to `.2`, … when it exceeds `max_bytes`. Returns True if rotated."""
+    """Rotate `path` to `.1`, `.1` to `.2`, … when it exceeds `max_bytes`. Returns True if rotated.
+    `keep < 1` is a no-op (returns False) since there'd be nowhere to rotate `path` to."""
+    if keep < 1:
+        return False
     try:
         if os.path.getsize(path) <= max_bytes:
             return False
@@ -604,14 +607,14 @@ class Bridge:
     def invalidate_workspace(self) -> None:
         self._ws = None
 
-    def _with_workspace_retry(self, fn):
-        """Run `fn(workspace_id)`; if it fails because the cached workspace vanished
-        (`workspace_not_found`/`not_found`), drop the cache and retry once with the
-        refreshed id. A second such failure propagates."""
+    def _with_workspace_retry(self, fn, codes: tuple = ("workspace_not_found", "not_found")):
+        """Run `fn(workspace_id)`; if it fails because the cached workspace vanished (one of
+        `codes`), drop the cache and retry once with the refreshed id. A second such failure
+        propagates, as does any error whose code isn't in `codes`."""
         try:
             return fn(self.workspace()["workspace_id"])
         except HerdrError as e:
-            if e.herdr_code not in ("workspace_not_found", "not_found"):
+            if e.herdr_code not in codes:
                 raise
             self.invalidate_workspace()
             return fn(self.workspace()["workspace_id"])
@@ -625,9 +628,13 @@ class Bridge:
             lambda ws_id: self.h.cli("pane", "list", "--workspace", ws_id)["result"].get("panes", []))
 
     def agents(self) -> list:
+        # `agent list` isn't scoped to a workspace, so `not_found` from it means something
+        # else vanished (e.g. the agent itself), not the cached workspace — retry only on
+        # `workspace_not_found` so that unrelated `not_found`s propagate instead of masking
+        # themselves behind a pointless `workspace list` refresh.
         def _fn(ws_id):
             return [a for a in self.h.cli("agent", "list")["result"].get("agents", []) if a.get("workspace_id") == ws_id]
-        return self._with_workspace_retry(_fn)
+        return self._with_workspace_retry(_fn, codes=("workspace_not_found",))
 
     def find_agent(self, name: str) -> dict | None:
         validate_name(name)
@@ -704,7 +711,7 @@ class Bridge:
         if pane_id:
             info = self.pane_info(pane_id)
             if (info and not info.get("agent")
-                    and info.get("workspace_id") == self.workspace()["workspace_id"]
+                    and info.get("workspace_id") == self._with_workspace_retry(lambda ws_id: ws_id)
                     and self.pane_is_shell(pane_id)):
                 return "restorable", pane_id
         return "missing", None
@@ -812,10 +819,14 @@ class Bridge:
         the wait outcome — the socket closed mid-call, herdr returned non-JSON, the server isn't
         running, or any other `HerdrError`/`OSError`/`ServerUnavailable` besides a genuine
         `timeout` or the agent being gone (`agent_not_found`/`agent_not_running`, which are
-        re-raised as-is) — fall back to polling `self.state()` every `poll_s` until it maps onto
-        `until` or `timeout_ms` elapses. Returns `self.state(name)`."""
+        re-raised as-is) — fall back to polling `self.state()` every `poll_s` (floored to at
+        least 0.05s, so `poll_s=0` can't busy-spin) until it maps onto `until` or `timeout_ms`
+        elapses. The deadline for that fallback is anchored before the primary `agent wait`
+        call, so the two share one `timeout_ms` budget instead of the fallback getting a fresh
+        `timeout_ms` on top of whatever `agent wait` already spent. Returns `self.state(name)`."""
         validate_name(name)
         until_set = set(until)
+        deadline = _now() + timeout_ms / 1000.0
         try:
             self.h.cli("agent", "wait", name, *[x for u in until for x in ("--until", u)],
                        "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
@@ -831,7 +842,6 @@ class Bridge:
             # the wait itself is unreliable, not the outcome — fall back to polling below.
         except (OSError, ServerUnavailable):
             pass
-        deadline = _now() + timeout_ms / 1000.0
         while True:
             state, agent = self.state(name)
             if state in ("dead", "missing"):
@@ -843,7 +853,7 @@ class Bridge:
                 raise BridgeError(
                     "timed out after %dms polling for %r to reach %s (herdr socket was unavailable)"
                     % (timeout_ms, name, sorted(until_set)), EXIT_TIMEOUT)
-            _sleep(poll_s)
+            _sleep(max(poll_s, 0.05))
 
     def send(self, name: str, text: str, timeout_ms: int):
         validate_name(name)
