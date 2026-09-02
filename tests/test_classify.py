@@ -36,6 +36,10 @@ class ClassifyTests(unittest.TestCase):
                          {"idle": 0, "busy": 8, "approval": 3, "secret": 4, "clarify": 5,
                           "blocked": 3, "unknown": 7, "dead": 7, "missing": 2})
 
+    def test_state_exit_unknown_state_defaults_to_error(self):
+        self.assertEqual(hb.state_exit("nonexistent"), 1)
+        self.assertEqual(hb.state_exit(""), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
