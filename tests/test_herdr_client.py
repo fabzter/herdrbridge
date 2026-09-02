@@ -204,6 +204,18 @@ class SocketTests(unittest.TestCase):
         with self.assertRaises(hb.ServerUnavailable):
             h.ensure_server(wait_s=0.05, poll_s=0.01)
 
+    def test_ensure_server_pre_check_catches_server_unavailable_and_still_spawns(self):
+        # Regression test: `ping()` -> `request()` now raises `ServerUnavailable` (not `OSError`) when
+        # the socket file is simply missing. `ensure_server`'s pre-check must catch that too, or it
+        # never reaches the spawn step. Uses the real `ping`/`request` path (no stubbing) so a
+        # pre-check `except` clause that omits `ServerUnavailable` is actually exercised.
+        spawned = []
+        h = hb.Herdr("t", socket_path=os.path.join(self.tmp, "missing.sock"),
+                     spawner=lambda *a, **k: spawned.append((a, k)))
+        with self.assertRaises(hb.ServerUnavailable):
+            h.ensure_server(wait_s=0.05, poll_s=0.01)
+        self.assertEqual(len(spawned), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

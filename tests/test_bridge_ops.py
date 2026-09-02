@@ -246,6 +246,9 @@ class SendTests(unittest.TestCase):
         self.assertEqual(reply, "")
         self.assertTrue(dialog.startswith("MESSAGE NOT DELIVERED"))
         self.assertFalse([c for c in h.calls if c[:3] == ("cli", "agent", "wait")])
+        # the "after" read is discarded on this path (extract_reply never runs); it must not be performed
+        before_reads = [c for c in h.calls if c[:5] == ("text", "agent", "read", "bean", "--source") and c[5] == "recent-unwrapped"]
+        self.assertEqual(len(before_reads), 1)
 
 
 class AnswerTests(unittest.TestCase):

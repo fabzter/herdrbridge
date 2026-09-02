@@ -211,7 +211,7 @@ class Herdr:
         try:
             self.ping()
             return
-        except (OSError, HerdrError, ValueError):
+        except (OSError, HerdrError, ValueError, ServerUnavailable):
             pass
         log_dir = os.path.dirname(self.socket_path)
         os.makedirs(log_dir, exist_ok=True)
@@ -659,7 +659,7 @@ class Bridge:
                 raise BridgeError("timed out after %dms waiting for %r; it may still be working" % (timeout_ms, name), EXIT_TIMEOUT)
             else:
                 raise
-        after = self.read(name)
+        after = None if blocked_before_input else self.read(name)
         state, agent = self.state(name)
         if agent:
             self.record_session(name, agent)
