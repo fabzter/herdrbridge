@@ -265,3 +265,39 @@ class StateStore:
         if not os.path.isdir(self.dir):
             return []
         return sorted(f[:-5] for f in os.listdir(self.dir) if f.endswith(".json"))
+
+
+STATES = ("idle", "busy", "approval", "secret", "clarify", "blocked", "unknown", "dead", "missing")
+
+RULE_STATES = {
+    # Hermes manifest (herdr agent-detection hermes.toml)
+    "dangerous_command_approval": "approval",
+    "confirmation_prompt": "approval",
+    "credential_prompt": "secret",
+    "clarification_prompt": "clarify",
+    # Claude manifest (claude.toml)
+    "bash_permission_prompt": "approval",
+    "generic_permission_prompt": "approval",
+    "legacy_no_prompt_blocker": "approval",
+    "live_blocked_form": "clarify",
+    "mcp_elicitation_prompt": "clarify",
+    "dynamic_workflow_prompt": "clarify",
+}
+
+STATE_EXIT = {"idle": EXIT_OK, "busy": EXIT_BUSY, "approval": EXIT_APPROVAL, "secret": EXIT_SECRET,
+              "clarify": EXIT_CLARIFY, "blocked": EXIT_APPROVAL, "unknown": EXIT_DEAD,
+              "dead": EXIT_DEAD, "missing": EXIT_MISSING}
+
+
+def classify(agent_status: str | None, matched_rule_id: str | None) -> str:
+    if agent_status in ("idle", "done"):
+        return "idle"
+    if agent_status == "working":
+        return "busy"
+    if agent_status == "blocked":
+        return RULE_STATES.get(matched_rule_id or "", "blocked")
+    return "unknown"
+
+
+def state_exit(state: str) -> int:
+    return STATE_EXIT.get(state, EXIT_ERROR)
