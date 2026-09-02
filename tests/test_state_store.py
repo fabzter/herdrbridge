@@ -38,6 +38,22 @@ class StateStoreTests(unittest.TestCase):
         self.assertTrue(self.store.delete("a")); self.assertFalse(self.store.delete("a"))
         self.assertEqual(self.store.names(), ["b"])
 
+    def test_delete_after_migration_does_not_resurrect(self):
+        with open(os.path.join(self.dir, "bean.session-id"), "w") as f:
+            f.write("20260827_113000_abcdef")
+        d = self.store.load("bean")
+        self.assertEqual(d["agent_session_id"], "20260827_113000_abcdef")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "bean.session-id")))
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "bean.session-id.migrated")))
+        self.assertTrue(self.store.delete("bean"))
+        self.assertEqual(self.store.load("bean"), {})
+
+    def test_delete_removes_unmigrated_legacy_file(self):
+        with open(os.path.join(self.dir, "old.session-id"), "w") as f:
+            f.write("20260827_113000_abcdef")
+        self.assertTrue(self.store.delete("old"))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "old.session-id")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -229,7 +229,9 @@ class StateStore:
             with open(legacy, "r", encoding="utf-8") as f:
                 sid = f.read().strip()
             if sid:
-                return self.save(name, agent_session_id=sid, migrated_from="session-id")
+                result = self.save(name, agent_session_id=sid, migrated_from="session-id")
+                os.replace(legacy, legacy + ".migrated")
+                return result
         return {}
 
     def save(self, name: str, **fields) -> dict:
@@ -249,10 +251,15 @@ class StateStore:
 
     def delete(self, name: str) -> bool:
         p = self._path(name)
+        deleted = False
         if os.path.exists(p):
             os.remove(p)
-            return True
-        return False
+            deleted = True
+        legacy = os.path.join(self.dir, "%s.session-id" % name)
+        if os.path.exists(legacy):
+            os.remove(legacy)
+            deleted = True
+        return deleted
 
     def names(self) -> list:
         if not os.path.isdir(self.dir):
