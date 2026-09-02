@@ -41,7 +41,9 @@ an agent in its workspace (`start`); reading and classifying its current
 state (`state`); sending a prompt and waiting for a reply (`send`);
 answering a clarification or walking an approval menu (`answer`,
 `navigate_menu`); and stopping a session or garbage-collecting stale tabs
-(`stop`, `gc`, `list_sessions`). Before launching an agent in a freshly
+(`stop`, `gc`, `list_sessions`). Every public `Bridge` entry point validates
+`name` via `validate_name` before it does anything else, so an invalid name
+never reaches herdr. Before launching an agent in a freshly
 created pane, `start` waits up to `BridgeConfig.shell_settle_s` (70s by
 default, polling every `poll_s`) for the pane's shell to settle, since a
 just-created pane can briefly have something other than a plain shell in the

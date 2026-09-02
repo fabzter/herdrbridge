@@ -615,6 +615,7 @@ class Bridge:
         return self._with_workspace_retry(_fn)
 
     def find_agent(self, name: str) -> dict | None:
+        validate_name(name)
         matches = [a for a in self.agents() if a.get("name") == name]
         if len(matches) > 1:
             raise BridgeError("multiple live agents named %r; refusing to guess" % name, EXIT_ERROR)
@@ -665,6 +666,7 @@ class Bridge:
 
     # --- session identity ---------------------------------------------------
     def record_session(self, name: str, agent: dict) -> None:
+        validate_name(name)
         sess = (agent.get("agent_session") or {}).get("value")
         fields = {}
         if agent.get("pane_id"):
@@ -678,6 +680,7 @@ class Bridge:
         self.store.save(name, **fields)
 
     def resolve(self, name: str):
+        validate_name(name)
         a = self.find_agent(name)
         if a:
             return "live", a
@@ -699,6 +702,7 @@ class Bridge:
         created: the shell-settle wait (`self.cfg.shell_settle_s`) + `busy_wait_s` of
         `agent_pane_busy` retries + one `agent start` call bounded by `self.cfg.start_timeout_ms`
         plus a 30s margin."""
+        validate_name(name)
         kind, obj = self.resolve(name)
         if kind == "live":
             self.record_session(name, obj)
@@ -747,6 +751,7 @@ class Bridge:
         return agent
 
     def explain_rule(self, name: str) -> str | None:
+        validate_name(name)
         try:
             out = self.h.cli("agent", "explain", name, "--json")
         except HerdrError:
@@ -759,6 +764,7 @@ class Bridge:
         return None
 
     def state(self, name: str):
+        validate_name(name)
         a = self.find_agent(name)
         if a:
             status = a.get("agent_status")
@@ -771,16 +777,20 @@ class Bridge:
 
     # --- I/O --------------------------------------------------------------------
     def read(self, name: str, lines: int | None = None, source: str = "recent-unwrapped") -> str:
+        validate_name(name)
         return self.h.cli_text("agent", "read", name, "--source", source, "--lines", str(lines or self.cfg.read_lines))
 
     def visible(self, name: str) -> str:
+        validate_name(name)
         return self.h.cli_text("agent", "read", name, "--source", "visible")
 
     def wait(self, name: str, timeout_ms: int):
+        validate_name(name)
         self.h.cli("agent", "wait", name, "--timeout", str(timeout_ms), timeout_s=timeout_ms / 1000.0 + 30)
         return self.state(name)
 
     def send(self, name: str, text: str, timeout_ms: int):
+        validate_name(name)
         state, agent = self.state(name)
         if state != "idle":
             raise BridgeError("session %r is %s; refusing to send" % (name, state), state_exit(state) or EXIT_ERROR)
@@ -809,6 +819,7 @@ class Bridge:
         return state, reply, truncated, dialog
 
     def answer(self, name: str, text: str, settle_s: float = 5.0, poll_s: float = 0.25) -> str:
+        validate_name(name)
         state, agent = self.state(name)
         if state != "clarify":
             raise BridgeError("session %r is %s, not clarify; refusing to answer" % (name, state), state_exit(state) or EXIT_ERROR)
@@ -824,6 +835,7 @@ class Bridge:
                 raise BridgeError("answer to %r did not register; agent still in clarify" % name, EXIT_CLARIFY)
 
     def navigate_menu(self, name: str, target_label: str, max_steps: int = 8, settle_s: float = 0.4) -> str:
+        validate_name(name)
         state, _ = self.state(name)
         if state != "approval":
             raise BridgeError("session %r is %s, not approval; refusing" % (name, state), state_exit(state) or EXIT_ERROR)
@@ -838,6 +850,7 @@ class Bridge:
         raise BridgeError("could not reach %r within %d keystrokes; refusing" % (target_label, max_steps))
 
     def stop(self, name: str, wait_s: float = 15) -> bool:
+        validate_name(name)
         a = self.find_agent(name)
         tab_id = None
         if a:

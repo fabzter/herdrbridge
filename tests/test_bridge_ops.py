@@ -582,5 +582,35 @@ class StopGcListTests(unittest.TestCase):
         self.assertIsNone(rows[0]["pane_id"])
 
 
+class NameValidationAtEntryPointsTests(unittest.TestCase):
+    """Every public Bridge entry point must reject an invalid name before it ever
+    reaches herdr — validate_name(name) must be the first statement of each."""
+
+    CASES = [
+        ("resolve", ()),
+        ("start", ([],)),  # launch_args=[]
+        ("state", ()),
+        ("read", ()),
+        ("visible", ()),
+        ("wait", (10,)),  # timeout_ms=10
+        ("send", ("x", 10)),  # text, timeout_ms
+        ("answer", ("y",)),  # text
+        ("navigate_menu", ("Deny",)),  # target_label
+        ("stop", ()),
+        ("record_session", ({},)),  # agent={}
+        ("find_agent", ()),
+        ("explain_rule", ()),
+    ]
+
+    def test_invalid_name_rejected_before_reaching_herdr(self):
+        h = FakeHerdr({})
+        b = bridge(h)
+        for method, args in self.CASES:
+            with self.subTest(method=method):
+                with self.assertRaises(hb.UsageError):
+                    getattr(b, method)("../evil", *args)
+                self.assertEqual(h.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
