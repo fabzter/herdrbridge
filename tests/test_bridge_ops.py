@@ -34,6 +34,55 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("--no-focus", create); self.assertIn("hermes-bridge", create)
 
 
+class WorkspaceRetryTests(unittest.TestCase):
+    WS1 = {"workspace_id": "w1", "label": "hermes-bridge"}
+    WS2 = {"workspace_id": "w2", "label": "hermes-bridge"}
+
+    def _two_workspace_h(self, **extra):
+        results = {"workspace list": [ok("workspace_list", workspaces=[self.WS1]),
+                                      ok("workspace_list", workspaces=[self.WS2])]}
+        results.update(extra)
+        return FakeHerdr(results)
+
+    def test_workspace_refresh_flag(self):
+        h = self._two_workspace_h()
+        b = bridge(h)
+        self.assertEqual(b.workspace()["workspace_id"], "w1")
+        self.assertEqual(b.workspace()["workspace_id"], "w1")  # cached, no refetch
+        self.assertEqual(b.workspace(refresh=True)["workspace_id"], "w2")
+        calls = [c for c in h.calls if c[:3] == ("cli", "workspace", "list")]
+        self.assertEqual(len(calls), 2)
+
+    def test_invalidate_workspace_forces_refresh(self):
+        h = self._two_workspace_h()
+        b = bridge(h)
+        self.assertEqual(b.workspace()["workspace_id"], "w1")
+        b.invalidate_workspace()
+        self.assertEqual(b.workspace()["workspace_id"], "w2")
+        calls = [c for c in h.calls if c[:3] == ("cli", "workspace", "list")]
+        self.assertEqual(len(calls), 2)
+
+    def test_tabs_retries_after_workspace_vanished(self):
+        h = self._two_workspace_h(**{
+            "tab list": [hb.HerdrError("workspace_not_found", "gone"), ok("tab_list", tabs=[{"tab_id": "w2:t1"}])]})
+        b = bridge(h)
+        self.assertEqual(b.tabs(), [{"tab_id": "w2:t1"}])
+        tab_calls = [c for c in h.calls if c[:3] == ("cli", "tab", "list")]
+        self.assertEqual(len(tab_calls), 2)
+        self.assertEqual(tab_calls[0][3:5], ("--workspace", "w1"))
+        self.assertEqual(tab_calls[1][3:5], ("--workspace", "w2"))
+
+    def test_second_consecutive_workspace_not_found_propagates(self):
+        h = self._two_workspace_h(**{
+            "tab list": [hb.HerdrError("workspace_not_found", "gone"),
+                        hb.HerdrError("workspace_not_found", "gone again")]})
+        b = bridge(h)
+        with self.assertRaises(hb.HerdrError):
+            b.tabs()
+        tab_calls = [c for c in h.calls if c[:3] == ("cli", "tab", "list")]
+        self.assertEqual(len(tab_calls), 2)  # exactly one retry, no infinite loop
+
+
 class ResolveTests(unittest.TestCase):
     def test_live_agent_by_name_in_workspace(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],

@@ -574,8 +574,8 @@ class Bridge:
         self._ws = None
 
     # --- topology ----------------------------------------------------------
-    def workspace(self) -> dict:
-        if self._ws:
+    def workspace(self, refresh: bool = False) -> dict:
+        if self._ws and not refresh:
             return self._ws
         for ws in self.h.cli("workspace", "list")["result"].get("workspaces", []):
             if ws.get("label") == self.cfg.workspace_label:
@@ -586,15 +586,33 @@ class Bridge:
         self._ws = res["workspace"]
         return self._ws
 
+    def invalidate_workspace(self) -> None:
+        self._ws = None
+
+    def _with_workspace_retry(self, fn):
+        """Run `fn(workspace_id)`; if it fails because the cached workspace vanished
+        (`workspace_not_found`/`not_found`), drop the cache and retry once with the
+        refreshed id. A second such failure propagates."""
+        try:
+            return fn(self.workspace()["workspace_id"])
+        except HerdrError as e:
+            if e.herdr_code not in ("workspace_not_found", "not_found"):
+                raise
+            self.invalidate_workspace()
+            return fn(self.workspace()["workspace_id"])
+
     def tabs(self) -> list:
-        return self.h.cli("tab", "list", "--workspace", self.workspace()["workspace_id"])["result"].get("tabs", [])
+        return self._with_workspace_retry(
+            lambda ws_id: self.h.cli("tab", "list", "--workspace", ws_id)["result"].get("tabs", []))
 
     def panes(self) -> list:
-        return self.h.cli("pane", "list", "--workspace", self.workspace()["workspace_id"])["result"].get("panes", [])
+        return self._with_workspace_retry(
+            lambda ws_id: self.h.cli("pane", "list", "--workspace", ws_id)["result"].get("panes", []))
 
     def agents(self) -> list:
-        ws = self.workspace()["workspace_id"]
-        return [a for a in self.h.cli("agent", "list")["result"].get("agents", []) if a.get("workspace_id") == ws]
+        def _fn(ws_id):
+            return [a for a in self.h.cli("agent", "list")["result"].get("agents", []) if a.get("workspace_id") == ws_id]
+        return self._with_workspace_retry(_fn)
 
     def find_agent(self, name: str) -> dict | None:
         matches = [a for a in self.agents() if a.get("name") == name]
@@ -621,9 +639,11 @@ class Bridge:
         return bool(fg) and all(os.path.basename(str(p.get("name", ""))) in SHELL_NAMES for p in fg)
 
     def _create_tab(self, name: str, cwd: str) -> tuple:
-        res = self.h.cli("tab", "create", "--workspace", self.workspace()["workspace_id"],
-                         "--cwd", cwd, "--label", name, "--no-focus")["result"]
-        return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
+        def _fn(ws_id):
+            res = self.h.cli("tab", "create", "--workspace", ws_id,
+                             "--cwd", cwd, "--label", name, "--no-focus")["result"]
+            return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
+        return self._with_workspace_retry(_fn)
 
     def _await_shell_ready(self, pane_id: str) -> None:
         """A just-created pane's shell may still be mid-startup with something other than a
