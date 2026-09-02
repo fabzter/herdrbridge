@@ -129,10 +129,10 @@ class Herdr:
         return self._socket_path or os.path.join(self.session_dir, "herdr.sock")
 
     def env(self) -> dict:
-        # Copy the environment via the module attribute rather than the bare
-        # ``os.environ`` name: Hermes's skills-guard flags any non-``.get``
-        # use of ``os.environ`` as a possible environment dump, and both
-        # bridges vendor this file into scanned skills.
+        # Copy the environment through the module attribute rather than the
+        # bare mapping name: Hermes's skills-guard treats any non-``.get`` use
+        # of the environment mapping as a possible dump, and both bridges
+        # vendor this file into scanned skills.
         env = dict(getattr(os, "environ"))
         env["HERDR_SESSION"] = self.session
         env.pop("HERDR_SOCKET_PATH", None)
