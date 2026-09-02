@@ -21,6 +21,11 @@ SESSION_DEFAULT = "agents"
 SESSION_NAME = SESSION_DEFAULT
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
+# Indirected through module-level names (rather than called as time.sleep/time.time directly)
+# so tests can patch hb._sleep/hb._now to drive deadline loops without real waiting.
+_sleep = time.sleep
+_now = time.time
+
 EXIT_OK, EXIT_ERROR, EXIT_MISSING, EXIT_APPROVAL, EXIT_SECRET = 0, 1, 2, 3, 4
 EXIT_CLARIFY, EXIT_TIMEOUT, EXIT_DEAD, EXIT_BUSY, EXIT_SERVER = 5, 6, 7, 8, 9
 
@@ -236,13 +241,13 @@ class Herdr:
         with open(log_path, "ab") as log:
             self._spawner([self.bin, "server"], env=self.env(), stdin=subprocess.DEVNULL,
                           stdout=log, stderr=log, start_new_session=True)
-        deadline = time.time() + wait_s
-        while time.time() < deadline:
+        deadline = _now() + wait_s
+        while _now() < deadline:
             try:
                 self.ping()
                 return
             except (OSError, HerdrError, ValueError, ServerUnavailable):
-                time.sleep(poll_s)
+                _sleep(poll_s)
         raise ServerUnavailable("herdr server for session %r did not answer within %ss (log: %s)"
                                 % (self.session, wait_s, log_path))
 
@@ -634,9 +639,9 @@ class Bridge:
         (`pane_info` returns None) — there's nothing left to settle."""
         if self.pane_info(pane_id) is None:
             return
-        deadline = time.time() + self.cfg.shell_settle_s
-        while not self.pane_is_shell(pane_id) and time.time() < deadline:
-            time.sleep(self.cfg.poll_s)
+        deadline = _now() + self.cfg.shell_settle_s
+        while not self.pane_is_shell(pane_id) and _now() < deadline:
+            _sleep(self.cfg.poll_s)
 
     # --- session identity ---------------------------------------------------
     def record_session(self, name: str, agent: dict) -> None:
@@ -709,9 +714,9 @@ class Bridge:
                     # before we ever called `agent start` — a slow first attempt shouldn't eat
                     # into the retry budget.
                     if busy_deadline is None:
-                        busy_deadline = time.time() + busy_wait_s
-                    if time.time() < busy_deadline:
-                        time.sleep(self.cfg.poll_s)
+                        busy_deadline = _now() + busy_wait_s
+                    if _now() < busy_deadline:
+                        _sleep(self.cfg.poll_s)
                         continue
                     raise
                 if e.herdr_code != "agent_not_ready":
@@ -783,17 +788,20 @@ class Bridge:
         reply, truncated = extract_reply(before, after, text, self.cfg.kind)
         return state, reply, truncated, dialog
 
-    def answer(self, name: str, text: str, settle_s: float = 1.0) -> str:
+    def answer(self, name: str, text: str, settle_s: float = 5.0, poll_s: float = 0.25) -> str:
         state, agent = self.state(name)
         if state != "clarify":
             raise BridgeError("session %r is %s, not clarify; refusing to answer" % (name, state), state_exit(state) or EXIT_ERROR)
         self.h.cli("pane", "send-text", agent["pane_id"], text)
         self.h.cli("pane", "send-keys", agent["pane_id"], "enter")
-        time.sleep(settle_s)
-        new_state, _ = self.state(name)
-        if new_state == "clarify":
-            raise BridgeError("answer to %r did not register; agent still in clarify" % name, EXIT_CLARIFY)
-        return new_state
+        deadline = _now() + settle_s
+        while True:
+            _sleep(poll_s)
+            new_state, _ = self.state(name)
+            if new_state != "clarify":
+                return new_state
+            if _now() >= deadline:
+                raise BridgeError("answer to %r did not register; agent still in clarify" % name, EXIT_CLARIFY)
 
     def navigate_menu(self, name: str, target_label: str, max_steps: int = 8, settle_s: float = 0.4) -> str:
         state, _ = self.state(name)
@@ -804,7 +812,7 @@ class Bridge:
             if step is None:
                 raise BridgeError("approval menu not recognized or %r not found exactly once; refusing to act" % target_label)
             self.h.cli("agent", "send-keys", name, step)
-            time.sleep(settle_s)
+            _sleep(settle_s)
             if step == "enter":
                 return self.state(name)[0]
         raise BridgeError("could not reach %r within %d keystrokes; refusing" % (target_label, max_steps))
@@ -820,9 +828,9 @@ class Bridge:
                 if e.herdr_code not in ("agent_not_running", "agent_not_found", "agent_blocked",
                                         "agent_prompt_stalled", "timeout"):
                     raise
-            deadline = time.time() + wait_s
-            while time.time() < deadline and self.find_agent(name):
-                time.sleep(0.5)
+            deadline = _now() + wait_s
+            while _now() < deadline and self.find_agent(name):
+                _sleep(0.5)
         else:
             st = self.store.load(name)
             if st.get("pane_id") and self.pane_info(st["pane_id"]):

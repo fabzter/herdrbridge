@@ -1,4 +1,5 @@
-import atexit, os, shutil, sys, tempfile, unittest
+import atexit, os, shutil, sys, tempfile, time, unittest
+import unittest.mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 import herdrbridge as hb
@@ -336,7 +337,7 @@ class AnswerTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])]})
         with self.assertRaises(hb.BridgeError) as cm:
-            bridge(h).answer("bean", "42", settle_s=0)
+            bridge(h).answer("bean", "42", settle_s=0, poll_s=0)
         self.assertEqual(cm.exception.code, 1)  # refusal exit codes must never be 0, even for idle
 
     def test_sends_text_then_enter_and_returns_new_state(self):
@@ -347,7 +348,7 @@ class AnswerTests(unittest.TestCase):
                        "pane send-text": [ok("pane_send_text")],
                        "pane send-keys": [ok("pane_send_keys")]})
         b = bridge(h)
-        result = b.answer("bean", "42", settle_s=0)
+        result = b.answer("bean", "42", settle_s=0, poll_s=0)
         self.assertEqual(result, "busy")
         self.assertEqual([c[3:] for c in h.calls if c[:3] == ("cli", "pane", "send-text")], [("w1:p1", "42")])
         self.assertEqual([c[3:] for c in h.calls if c[:3] == ("cli", "pane", "send-keys")], [("w1:p1", "enter")])
@@ -360,8 +361,48 @@ class AnswerTests(unittest.TestCase):
                        "pane send-keys": [ok("pane_send_keys")]})
         b = bridge(h)
         with self.assertRaises(hb.BridgeError) as cm:
-            b.answer("bean", "42", settle_s=0)
+            b.answer("bean", "42", settle_s=0, poll_s=0)
         self.assertEqual(cm.exception.code, hb.EXIT_CLARIFY)
+
+    def test_polls_until_agent_leaves_clarify(self):
+        # agent list is scripted [clarify, clarify, clarify, working]: the initial state()
+        # check consumes the first entry, then the poll loop consumes the rest one per
+        # iteration until it sees "working". hb._sleep/_now are patched so no real time
+        # passes and the fake clock is what the deadline check is measured against.
+        agents = ([agent("bean", status="blocked", pane="w1:p1")] * 3
+                  + [agent("bean", status="working", pane="w1:p1")])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[a]) for a in agents],
+                       "agent explain": [{"matched_rule": {"id": "clarification_prompt"}}],
+                       "pane send-text": [ok("pane_send_text")],
+                       "pane send-keys": [ok("pane_send_keys")]})
+        b = bridge(h)
+        sleeps = []
+        clock = {"t": 0.0}
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: (sleeps.append(s), clock.__setitem__("t", clock["t"] + s))), \
+             unittest.mock.patch.object(hb, "_now", lambda: clock["t"]):
+            result = b.answer("bean", "yes", settle_s=1.0, poll_s=0.1)
+        self.assertEqual(result, "busy")
+        self.assertLessEqual(len(sleeps), 10)
+
+    def test_all_clarify_raises_after_deadline_with_no_real_sleep(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="blocked", pane="w1:p1")])],
+                       "agent explain": [{"matched_rule": {"id": "clarification_prompt"}}],
+                       "pane send-text": [ok("pane_send_text")],
+                       "pane send-keys": [ok("pane_send_keys")]})
+        b = bridge(h)
+        sleeps = []
+        clock = {"t": 0.0}
+        started = time.time()
+        with unittest.mock.patch.object(hb, "_sleep", lambda s: (sleeps.append(s), clock.__setitem__("t", clock["t"] + s))), \
+             unittest.mock.patch.object(hb, "_now", lambda: clock["t"]):
+            with self.assertRaises(hb.BridgeError) as cm:
+                b.answer("bean", "yes", settle_s=1.0, poll_s=0.25)
+        elapsed = time.time() - started
+        self.assertEqual(cm.exception.code, 5)
+        self.assertLessEqual(len(sleeps), 10)
+        self.assertLess(elapsed, 0.05)  # patched clock/sleep: no real time should have passed
 
 
 class MenuNavTests(unittest.TestCase):
