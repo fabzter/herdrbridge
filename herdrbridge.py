@@ -550,7 +550,7 @@ class Bridge:
                          "--cwd", cwd, "--label", name, "--no-focus")["result"]
         return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
 
-    def _await_shell_ready(self, pane_id: str, wait_s: float = 15, poll_s: float = 0.3) -> None:
+    def _await_shell_ready(self, pane_id: str, wait_s: float = 30, poll_s: float = 0.3) -> None:
         """A just-created pane's shell may still be mid-startup (slow rc files, e.g. a pyenv
         rehash) with something other than a plain shell in the foreground; `agent start`
         fails immediately with `agent_pane_busy` in that case instead of waiting. Poll until
