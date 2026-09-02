@@ -18,6 +18,7 @@
 - herdr session handling: `session_name()` returns `HERDR_BRIDGE_SESSION` or `agents`; the library never touches the default herdr session and never stops servers.
 - Tests: `python3 -m unittest discover -s tests -v` from the repo root passes before every commit. Also run with `/Users/fabzter/.hermes/hermes-agent/venv/bin/python` in Task 7.
 - Commit messages carry no attribution footers of any kind. Push after each task (`git push origin main`; the repo has a repo-local credential helper for the `fabzter` account).
+- No AI authorship attribution anywhere: commit messages, code comments, docstrings, READMEs and SKILL.md must not say the code was written or co-authored by an AI tool (Claude Code may be *mentioned as the agent the bridge talks to*, never as the author). Remove such sentences from existing docs you rewrite.
 
 ## File structure
 
