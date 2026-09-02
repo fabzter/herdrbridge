@@ -6,6 +6,7 @@ Stdlib only; Python 3.9+.
 """
 from __future__ import annotations
 
+import collections
 import datetime
 import json
 import os
@@ -408,3 +409,32 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
     if fresh is not None:
         return fresh, True
     return "\n".join(lines[-120:]).strip(), True
+
+
+# --- approval menu navigation planner ----
+
+MenuRow = collections.namedtuple("MenuRow", "number label selected")
+_MENU_ROW = re.compile(r"^\s*(?P<cur>[▸❯>])?\s*(?P<num>\d{1,2})\.\s+(?P<label>\S.*?)\s*$")
+
+
+def parse_menu(visible: str) -> list:
+    rows = []
+    for ln in visible.splitlines():
+        m = _MENU_ROW.match(ln)
+        if m:
+            rows.append(MenuRow(int(m.group("num")), m.group("label"), bool(m.group("cur"))))
+    return rows
+
+
+def plan_menu_step(visible: str, target: str) -> str | None:
+    rows = parse_menu(visible)
+    if len(rows) < 2:
+        return None
+    selected = [i for i, r in enumerate(rows) if r.selected]
+    targets = [i for i, r in enumerate(rows) if target.lower() in r.label.lower()]
+    if len(selected) != 1 or len(targets) != 1:
+        return None
+    cur, tgt = selected[0], targets[0]
+    if cur == tgt:
+        return "enter"
+    return "down" if tgt > cur else "up"

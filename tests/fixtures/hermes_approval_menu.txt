@@ -1,0 +1,8 @@
+Hermes wants to run a dangerous command:
+  rm -rf ~/tmp/foo
+⚠ Dangerous command approval
+▸ 1. Allow once
+  2. Allow for this session
+  3. Add to permanent allowlist
+  4. Deny
+↑/↓ to select · Enter confirm · s show full command
