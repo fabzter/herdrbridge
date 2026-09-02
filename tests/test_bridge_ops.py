@@ -184,6 +184,34 @@ class StartTests(unittest.TestCase):
         self.assertGreaterEqual(len(pinfo_idx), 2)
         self.assertGreater(start_idx, pinfo_idx[-1])  # agent start only fired after the pane settled
 
+    def test_start_retries_agent_start_itself_on_a_late_agent_pane_busy(self):
+        # pane_is_shell() is only a snapshot taken before the call; herdr's own busy check at
+        # the moment `agent start` actually fires is authoritative and can still lose a brief
+        # race even right after pane_is_shell() reported ready. start() must retry the `agent
+        # start` call itself (not just its own pre-check) when herdr reports agent_pane_busy.
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])],
+                       "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [READY_SHELL],
+                       "agent start": [hb.HerdrError("agent_pane_busy", "not an available shell"),
+                                       ok("agent_started", agent=agent("bean", pane="w1:p5"))]})
+        b = bridge(h)
+        a = b.start("bean", ["chat"])
+        self.assertEqual(a["pane_id"], "w1:p5")
+        start_calls = [c for c in h.calls if c[:3] == ("cli", "agent", "start")]
+        self.assertEqual(len(start_calls), 2)
+
+    def test_start_gives_up_and_raises_after_agent_pane_busy_persists(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])],
+                       "tab create": [ok("tab_created", tab={"tab_id": "w1:t3"}, root_pane={"pane_id": "w1:p5"})],
+                       "pane process-info": [READY_SHELL],
+                       "agent start": [hb.HerdrError("agent_pane_busy", "not an available shell")]})
+        b = bridge(h)
+        with self.assertRaises(hb.HerdrError) as cm:
+            b.start("bean", ["chat"], busy_wait_s=0)
+        self.assertEqual(cm.exception.herdr_code, "agent_pane_busy")
+
 
 class ExplainRuleTests(unittest.TestCase):
     def test_returns_none_when_explain_raises(self):

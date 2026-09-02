@@ -593,7 +593,7 @@ class Bridge:
 
     # --- lifecycle ------------------------------------------------------------
     def start(self, name: str, launch_args: list, fresh: bool = False, resume_flag: str = "--resume",
-              cwd: str | None = None) -> dict:
+              cwd: str | None = None, busy_wait_s: float = 10) -> dict:
         kind, obj = self.resolve(name)
         if kind == "live":
             self.record_session(name, obj)
@@ -611,15 +611,26 @@ class Bridge:
         args = list(launch_args)
         if st.get("agent_session_id"):
             args += [resume_flag, st["agent_session_id"]]
-        try:
-            res = self.h.cli("agent", "start", name, "--kind", self.cfg.kind, "--pane", pane_id,
-                             "--timeout", str(self.cfg.start_timeout_ms), "--", *args,
-                             timeout_s=self.cfg.start_timeout_ms / 1000.0 + 30)["result"]
-            agent = res["agent"]
-        except HerdrError as e:
-            if e.herdr_code != "agent_not_ready":
-                raise
-            agent = self.find_agent(name) or {"pane_id": pane_id, "name": name, "agent_status": "blocked"}
+        # _await_shell_ready() above is only a heuristic snapshot; herdr's own busy check at the
+        # moment `agent start` actually fires is the authoritative one and can still lose a brief
+        # race (observed live: the pane looked like a plain shell an instant before agent_pane_busy
+        # came back anyway). Retry the call itself on that specific error for a bit before giving up.
+        busy_deadline = time.time() + busy_wait_s
+        while True:
+            try:
+                res = self.h.cli("agent", "start", name, "--kind", self.cfg.kind, "--pane", pane_id,
+                                 "--timeout", str(self.cfg.start_timeout_ms), "--", *args,
+                                 timeout_s=self.cfg.start_timeout_ms / 1000.0 + 30)["result"]
+                agent = res["agent"]
+                break
+            except HerdrError as e:
+                if e.herdr_code == "agent_pane_busy" and time.time() < busy_deadline:
+                    time.sleep(0.3)
+                    continue
+                if e.herdr_code != "agent_not_ready":
+                    raise
+                agent = self.find_agent(name) or {"pane_id": pane_id, "name": name, "agent_status": "blocked"}
+                break
         self.record_session(name, agent)
         return agent
 
