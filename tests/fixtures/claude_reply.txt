@@ -1,6 +1,4 @@
 export plugin already enabled
-user@host hermes-claude-bridge % claude --allowedTools Read,Grep,Glob,WebSearch,WebFetch --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit
-Permission deny rule "MultiEdit" matches no known tool — check for typos.
 ╭─── Claude Code v2.1.236 ───────────────────────────────────────────────────────────────────╮
 │                                                    │ Tips for getting started              │
 │                  Welcome back!                     │ Run /init to create a CLAUDE.md file… │

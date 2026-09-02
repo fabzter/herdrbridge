@@ -35,24 +35,35 @@ planner** (`parse_menu`, `plan_menu_step`) reads a herdr approval menu off
 the screen and plans one arrow-key/enter step at a time toward a target
 option, refusing to guess when the screen doesn't look like a menu it
 recognizes. Finally, **`Bridge`** ties all of this together into the
-operations a bridge actually needs: resolving a session name to a live
-agent, a restorable idle pane, or nothing (`resolve`); starting or resuming
-an agent in its workspace (`start`); reading and classifying its current
-state (`state`); sending a prompt and waiting for a reply (`send`);
+operations a bridge actually needs: resolving the bridge's herdr workspace,
+creating it on first use and caching it thereafter (`workspace`), with
+`refresh=True` or a prior call to `invalidate_workspace` forcing a fresh
+`workspace list`/`create` round-trip — every topology call (`tabs`, `panes`,
+`agents`, and anything that creates a tab) goes through this cache and
+retries itself once, re-resolving the workspace, if herdr reports the
+cached id gone (`workspace_not_found`/`not_found`); resolving a session name
+to a live agent, a restorable idle pane, or nothing (`resolve`); starting or
+resuming an agent in its workspace (`start`); reading and classifying its
+current state (`state`); sending a prompt and waiting for a reply (`send`);
 waiting for an agent to reach one of a set of target statuses, preferring
 herdr's own server-side `agent wait` but falling back to polling `state`
 if that call itself fails for a reason unrelated to the wait outcome, such
 as the socket dropping mid-call (`wait_status`); answering a clarification
-or walking an approval menu (`answer`,
-`navigate_menu`); and stopping a session or garbage-collecting stale tabs
-(`stop`, `gc`, `list_sessions`). Every public `Bridge` entry point validates
-`name` via `validate_name` before it does anything else, so an invalid name
-never reaches herdr. Before launching an agent in a freshly
-created pane, `start` waits up to `BridgeConfig.shell_settle_s` (70s by
-default, polling every `poll_s`) for the pane's shell to settle, since a
-just-created pane can briefly have something other than a plain shell in the
-foreground; lower `shell_settle_s` in your own `BridgeConfig` if your setup
-never hits that worst case and you'd rather fail fast.
+by sending the text and an enter keypress, then polling `state` every
+`poll_s` (default 0.25s) until it leaves `clarify` or `settle_s` (default
+5s) runs out (`answer`); walking an approval menu (`navigate_menu`); and
+stopping a session or garbage-collecting stale tabs (`stop`, `gc`,
+`list_sessions`). Every public `Bridge` entry point validates `name` via
+`validate_name` before it does anything else, so an invalid name never
+reaches herdr. Before launching an agent in a freshly created pane, `start`
+waits up to `BridgeConfig.shell_settle_s` (70s by default, polling every
+`poll_s`) for the pane's shell to settle, since a just-created pane can
+briefly have something other than a plain shell in the foreground; lower
+`shell_settle_s` in your own `BridgeConfig` if your setup never hits that
+worst case and you'd rather fail fast. All of these polling loops read the
+clock and sleep through the module-level `_sleep`/`_now` hooks (aliases for
+`time.sleep`/`time.time` by default), so tests can patch `herdrbridge._sleep`
+and `herdrbridge._now` to drive deadline loops without waiting in real time.
 
 Downstream repos never install this as a dependency; each bridge repo vendors
 this file with a `tools/sync-lib.sh` that fetches `herdrbridge.py`,

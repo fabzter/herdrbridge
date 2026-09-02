@@ -299,6 +299,9 @@ bridge, only coarsen it.
 - `keys NAME KEY…` (claude-bridge only): raw `agent send-keys`, for the human-
   authorized case where Hermes is told "approve Claude's prompt". The SKILL.md
   restricts it to that case and requires reading the dialog first.
+- `--yolo`/bypass permission modes are permitted only when the user explicitly
+  requests them for a session; the default remains prompting (`manual` for
+  Claude, no `--yolo` for Hermes).
 
 ### 3.10 Shutdown and hygiene
 
