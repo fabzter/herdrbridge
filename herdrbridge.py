@@ -333,8 +333,10 @@ _HERMES_ECHO = re.compile(r"^\s*●\s*(.*)$")
 _HERMES_BOX_OPEN = re.compile(r"^\s*╭─.*Hermes")
 _HERMES_BOX_CLOSE = re.compile(r"^\s*╰")
 _PROMPT_LINE = re.compile(r"^\s*(│\s*)?❯\s*(│\s*)?$")
-_CLAUDE_ECHO = re.compile(r"^\s*>\s*(.*)$")
-_CLAUDE_CHROME = re.compile(r"(\? for shortcuts|esc to interrupt|bypass permissions|⏵⏵|shift\+tab to cycle)", re.I)
+_CLAUDE_ECHO = re.compile(r"^\s*[>❯]\s*(.*)$")
+_CLAUDE_CHROME = re.compile(
+    r"(\? for shortcuts|esc to interrupt|bypass permissions|⏵⏵|shift\+tab to cycle|ctrl\+o to expand"
+    r"|^\s*[✢✳✻✽]\s+\S.*\bfor\s+\d+s\.?\s*$)", re.I)
 
 
 def _first_line(prompt: str) -> str:

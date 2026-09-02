@@ -65,6 +65,30 @@ class ClaudeExtractTests(unittest.TestCase):
         self.assertNotIn("❯", reply); self.assertNotIn("? for shortcuts", reply)
         self.assertNotIn("Claude Code v", reply)
 
+    def test_real_claude_code_echoes_prompt_with_fancy_angle_not_ascii_gt(self):
+        # Claude Code >= 2.1 echoes the submitted prompt with '❯' (U+276F), not the ASCII
+        # '>' the synthetic fixture used. Also strips the collapsed tool-summary line
+        # ("Read 1 file (ctrl+o to expand)") and the elapsed-time spinner footer
+        # ("✻ Sautéed for 4s") as UI chrome, the same way it already strips shortcuts hints.
+        after = (
+            "❯ Summarize what the file README.md is about in one sentence.\n\n"
+            "  Read 1 file (ctrl+o to expand)\n\n"
+            "⏺ README.md describes a Hermes Agent skill that lets Hermes hold a continuing,\n"
+            "  read-only conversation with Claude Code.\n\n"
+            "✻ Sautéed for 4s\n\n"
+            "──────\n"
+            "❯\n"
+            "──────\n"
+            "  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+        )
+        reply, trunc = hb.extract_reply("", after,
+                                        "Summarize what the file README.md is about in one sentence.", "claude")
+        self.assertFalse(trunc)
+        self.assertEqual(reply, "README.md describes a Hermes Agent skill that lets Hermes hold a continuing,\n"
+                                 "  read-only conversation with Claude Code.")
+        self.assertNotIn("ctrl+o to expand", reply)
+        self.assertNotIn("Sautéed", reply)
+
 
 if __name__ == "__main__":
     unittest.main()
