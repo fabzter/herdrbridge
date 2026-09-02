@@ -550,12 +550,15 @@ class Bridge:
                          "--cwd", cwd, "--label", name, "--no-focus")["result"]
         return res["tab"]["tab_id"], res["root_pane"]["pane_id"]
 
-    def _await_shell_ready(self, pane_id: str, wait_s: float = 30, poll_s: float = 0.3) -> None:
-        """A just-created pane's shell may still be mid-startup (slow rc files, e.g. a pyenv
-        rehash) with something other than a plain shell in the foreground; `agent start`
-        fails immediately with `agent_pane_busy` in that case instead of waiting. Poll until
-        the pane settles into a plain shell, or give up after `wait_s` and let `agent start`
-        raise its own error."""
+    def _await_shell_ready(self, pane_id: str, wait_s: float = 70, poll_s: float = 0.3) -> None:
+        """A just-created pane's shell may still be mid-startup with something other than a
+        plain shell in the foreground; `agent start` fails immediately with `agent_pane_busy`
+        in that case instead of waiting. One observed cause: a workspace's root pane and its
+        first tab both get fresh shells at nearly the same moment, and if both independently
+        run `pyenv rehash` on startup they collide on pyenv's shim lock file — the loser just
+        retries every 0.1s until pyenv's own ~60s timeout gives up. `wait_s` is set to clear
+        that worst case. Poll until the pane settles into a plain shell, or give up after
+        `wait_s` and let `agent start` raise its own error."""
         deadline = time.time() + wait_s
         while not self.pane_is_shell(pane_id) and time.time() < deadline:
             time.sleep(poll_s)
