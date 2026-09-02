@@ -34,6 +34,7 @@ _HERDR_ERROR_EXITS = {
     "server_not_running": EXIT_SERVER,
     "tab_not_found": EXIT_MISSING,
     "workspace_not_found": EXIT_MISSING,
+    "agent_pane_busy": EXIT_BUSY,
 }
 
 
@@ -440,10 +441,25 @@ def extract_reply(before: str, after: str, prompt: str, kind: str):
 MenuRow = collections.namedtuple("MenuRow", "number label selected")
 _MENU_ROW = re.compile(r"^\s*(?P<cur>[▸❯>])?\s*(?P<num>\d{1,2})\.\s+(?P<label>\S.*?)\s*$")
 _MENU_FOOTER = re.compile(r"(↑/↓|enter confirm|enter to confirm|show full command)", re.I)
+_BOX_STRIP_LEAD = re.compile(r"^\s*│\s*")
+_BOX_STRIP_TRAIL = re.compile(r"\s*│\s*$")
+_MENU_SKIP_BUDGET = 8
+
+
+def _strip_box(line: str) -> str:
+    """Strip Hermes's boxed-menu border: a leading `│` (with surrounding spaces) and a
+    trailing `│` (with surrounding spaces), e.g. `│ ❯ 1. Allow once     │` -> `❯ 1. Allow once`."""
+    line = _BOX_STRIP_LEAD.sub("", line)
+    line = _BOX_STRIP_TRAIL.sub("", line)
+    return line
 
 
 def parse_menu(visible: str) -> list:
-    """Parse a Hermes approval menu; returns [] unless the screen ends in a menu footer with contiguous numbered rows above it."""
+    """Parse a Hermes approval menu; returns [] unless the screen ends in a menu footer with
+    numbered rows findable above it. Rows may be wrapped in a box (`_strip_box`) and separated
+    from the footer by a bounded number of non-row lines (status line, box borders, blanks) —
+    those are skipped while hunting for the first row, up to `_MENU_SKIP_BUDGET` of them; once
+    a row is found, any further non-row line ends the walk."""
     lines = visible.splitlines()
     footer_idx = None
     for i in range(len(lines) - 1, -1, -1):
@@ -453,12 +469,17 @@ def parse_menu(visible: str) -> list:
     if footer_idx is None:
         return []
     rows = []
+    skipped = 0
     for i in range(footer_idx - 1, -1, -1):
-        m = _MENU_ROW.match(lines[i])
+        m = _MENU_ROW.match(_strip_box(lines[i]))
         if m:
             rows.append(MenuRow(int(m.group("num")), m.group("label"), bool(m.group("cur"))))
-        elif lines[i].strip():
+            continue
+        if rows:
             break
+        skipped += 1
+        if skipped > _MENU_SKIP_BUDGET:
+            return []
     return list(reversed(rows))
 
 
@@ -488,7 +509,7 @@ class BridgeConfig:
     kind: str
     default_cwd: str
     exit_command: str = "/exit"
-    start_timeout_ms: int = 60000
+    start_timeout_ms: int = 120000
     wait_timeout_ms: int = 600000
     read_lines: int = 400
 

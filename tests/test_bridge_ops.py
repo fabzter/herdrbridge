@@ -124,7 +124,7 @@ class StartTests(unittest.TestCase):
         a = b.start("bean", ["chat", "--cli", "--source", "tool"])
         self.assertEqual(a["pane_id"], "w1:p5")
         start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
-        self.assertEqual(start[3:], ("bean", "--kind", "hermes", "--pane", "w1:p5", "--timeout", "60000", "--",
+        self.assertEqual(start[3:], ("bean", "--kind", "hermes", "--pane", "w1:p5", "--timeout", "120000", "--",
                                      "chat", "--cli", "--source", "tool", "--resume", "S1"))
         self.assertEqual(b.store.load("bean")["pane_id"], "w1:p5")
         self.assertEqual(b.store.load("bean")["agent_session_id"], "S1")

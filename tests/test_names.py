@@ -36,6 +36,7 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(hb.herdr_error_exit("server_not_running"), 9)
         self.assertEqual(hb.herdr_error_exit("tab_not_found"), 2)
         self.assertEqual(hb.herdr_error_exit("workspace_not_found"), 2)
+        self.assertEqual(hb.herdr_error_exit("agent_pane_busy"), 8)
         self.assertEqual(hb.herdr_error_exit("something_else"), 1)
         e = hb.HerdrError("timeout", "wait timed out")
         self.assertEqual(e.code, 6)

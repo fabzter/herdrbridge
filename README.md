@@ -53,3 +53,9 @@ tracking it live.
 Requires herdr >= 0.8.2.
 
 Tests: `python3 -m unittest discover -s tests -v`
+
+## Known Hermes issues
+
+Hermes v0.20.0 may segfault in the LadybugDB memory provider after a turn.
+When that happens the bridge reports the session as `dead`; calling `start`
+again resumes it.

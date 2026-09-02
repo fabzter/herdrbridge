@@ -59,6 +59,36 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(len(hb.parse_menu(menu)), 4)
         self.assertEqual(hb.plan_menu_step(menu, "Deny"), "down")
 
+    # --- boxed menu (live Hermes render: rows wrapped in a box, status line and
+    # border sit between the last row and the footer) ---
+
+    def test_parse_rows_boxed(self):
+        rows = hb.parse_menu(fx("hermes_approval_menu_boxed.txt"))
+        self.assertEqual([(r.number, r.label, r.selected) for r in rows],
+                         [(1, "Allow once", True), (2, "Allow for this session", False),
+                          (3, "Add to permanent allowlist", False), (4, "Deny", False)])
+
+    def test_boxed_down_to_reach_deny(self):
+        self.assertEqual(hb.plan_menu_step(fx("hermes_approval_menu_boxed.txt"), "Deny"), "down")
+
+    def test_boxed_enter_when_cursor_on_target(self):
+        self.assertEqual(hb.plan_menu_step(fx("hermes_approval_menu_boxed.txt"), "Allow once"), "enter")
+
+    def test_boxed_rows_more_than_8_lines_above_footer_give_up(self):
+        boxed = fx("hermes_approval_menu_boxed.txt")
+        lines = boxed.splitlines()
+        footer = lines[-1]
+        rows_and_above = lines[:-1]  # everything up to and including the last row
+        filler = ["  (filler line %d)" % i for i in range(9)]
+        menu = "\n".join(rows_and_above + filler + [footer])
+        self.assertEqual(hb.parse_menu(menu), [])
+        self.assertIsNone(hb.plan_menu_step(menu, "Deny"))
+
+    def test_boxed_footer_without_rows_returns_empty(self):
+        menu = "just some preamble\n↑/↓ to select, Enter to confirm, s show full command"
+        self.assertEqual(hb.parse_menu(menu), [])
+        self.assertIsNone(hb.plan_menu_step(menu, "Deny"))
+
 
 if __name__ == "__main__":
     unittest.main()

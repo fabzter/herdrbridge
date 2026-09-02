@@ -1,0 +1,11 @@
+Hermes wants to run a dangerous command:
+╭─ Dangerous command approval ─────────────────────────────────────────────╮
+│ rm -rf /tmp/hermes-bridge-e2e-does-not-exist                              │
+│                                                                           │
+│ ❯ 1. Allow once                                                           │
+│   2. Allow for this session                                               │
+│   3. Add to permanent allowlist                                           │
+│   4. Deny                                                                 │
+╰───────────────────────────────────────────────────────────────────────────╯
+  💻 rm -rf /tmp/hermes-bridge-e2e-does-not-exist (6.6s · ↓ 85 tok)
+↑/↓ to select, Enter to confirm, s show full command
